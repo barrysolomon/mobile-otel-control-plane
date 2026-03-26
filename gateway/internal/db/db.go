@@ -344,6 +344,11 @@ func (db *Database) Close() error {
 	return db.conn.Close()
 }
 
+// DB returns the underlying *sql.DB connection for use by sub-packages.
+func (d *Database) DB() *sql.DB {
+	return d.conn
+}
+
 // Config version operations
 
 func (db *Database) GetActiveConfig() (*ConfigVersion, error) {

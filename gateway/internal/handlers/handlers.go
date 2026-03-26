@@ -12,9 +12,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mobile-observability/gateway/internal/cohort"
 	"github.com/mobile-observability/gateway/internal/config"
 	"github.com/mobile-observability/gateway/internal/db"
+	"github.com/mobile-observability/gateway/internal/fleet"
 	"github.com/mobile-observability/gateway/internal/otel"
+	"github.com/mobile-observability/gateway/internal/push"
 )
 
 // Handler holds the shared dependencies for all HTTP route handlers.
@@ -22,6 +25,31 @@ type Handler struct {
 	db        *db.Database
 	exporter  *otel.LogExporter
 	configMgr *config.Manager
+	// Fleet intelligence components
+	fleetDB      *db.FleetDB
+	auditDB      *db.AuditDB
+	cohortMgr    *cohort.Manager
+	ruleEngine   *fleet.FleetRuleEngine
+	pushBroker   *push.Broker
+	breakerState *fleet.BreakerState
+	budgetMgr    *fleet.BudgetManager
+	pipeline     *fleet.FleetEventPipeline
+	dedup        *fleet.EventDeduplicator
+	hmacSecret   []byte
+}
+
+// FleetComponents holds all fleet intelligence dependencies.
+type FleetComponents struct {
+	FleetDB      *db.FleetDB
+	AuditDB      *db.AuditDB
+	CohortMgr    *cohort.Manager
+	RuleEngine   *fleet.FleetRuleEngine
+	PushBroker   *push.Broker
+	BreakerState *fleet.BreakerState
+	BudgetMgr    *fleet.BudgetManager
+	Pipeline     *fleet.FleetEventPipeline
+	Dedup        *fleet.EventDeduplicator
+	HmacSecret   []byte
 }
 
 // IngestRequest is the JSON body accepted by the POST /ingest endpoint.
@@ -43,6 +71,7 @@ type StatusRequest struct {
 type PublishRequest struct {
 	GraphJSON   string `json:"graph_json"`
 	DSLJSON     string `json:"dsl_json"`
+	DSLV2JSON   string `json:"dsl_v2_json,omitempty"`
 	PublishedBy string `json:"published_by"`
 }
 
@@ -62,6 +91,37 @@ type RegisterDeviceRequest struct {
 // UpdateDeviceGroupRequest is the JSON body accepted by the PATCH /api/v1/devices/group endpoint.
 type UpdateDeviceGroupRequest struct {
 	DeviceGroup string `json:"device_group"`
+}
+
+// CreateWorkflowRequest is the JSON body accepted by the POST /api/v1/workflows endpoint.
+type CreateWorkflowRequest struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Enabled   bool   `json:"enabled"`
+	GraphJSON string `json:"graph_json"`
+}
+
+// UpdateWorkflowRequest is the JSON body accepted by the PUT /api/v1/workflows/detail endpoint.
+type UpdateWorkflowRequest struct {
+	Name      string `json:"name"`
+	Enabled   *bool  `json:"enabled"`
+	GraphJSON string `json:"graph_json"`
+}
+
+// CreateTargetingRuleRequest is the JSON body accepted by the POST /v1/targeting-rules endpoint.
+type CreateTargetingRuleRequest struct {
+	WorkflowID  string `json:"workflow_id"`
+	DeviceGroup string `json:"device_group"`
+	RulesJSON   string `json:"rules_json"`
+}
+
+// UpsertBufferConfigRequest is the JSON body accepted by the POST /v1/buffer-configs endpoint.
+type UpsertBufferConfigRequest struct {
+	DeviceGroup    string `json:"device_group"`
+	RAMEvents      int    `json:"ram_events"`
+	DiskMB         int    `json:"disk_mb"`
+	RetentionHours int    `json:"retention_hours"`
+	Strategy       string `json:"strategy"`
 }
 
 // CreateOTELConfigRequest is the JSON body accepted by the POST /api/v1/otel-configs endpoint.
@@ -86,6 +146,17 @@ func NewHandler(database *db.Database, exporter *otel.LogExporter, configMgr *co
 		db:        database,
 		exporter:  exporter,
 		configMgr: configMgr,
+	}
+}
+
+// NewHandlerWithFleet creates a Handler with fleet intelligence components wired in.
+func NewHandlerWithFleet(database *db.Database, exporter *otel.LogExporter, configMgr *config.Manager, fc FleetComponents) *Handler {
+	return &Handler{
+		db: database, exporter: exporter, configMgr: configMgr,
+		fleetDB: fc.FleetDB, auditDB: fc.AuditDB, cohortMgr: fc.CohortMgr,
+		ruleEngine: fc.RuleEngine, pushBroker: fc.PushBroker,
+		breakerState: fc.BreakerState, budgetMgr: fc.BudgetMgr,
+		pipeline: fc.Pipeline, dedup: fc.Dedup, hmacSecret: fc.HmacSecret,
 	}
 }
 
@@ -128,7 +199,8 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleGetConfig returns the active DSL configuration for a device
+// HandleGetConfig returns the active DSL configuration for a device.
+// Supports version negotiation via ?dsl_version=1 (default) or ?dsl_version=2.
 func (h *Handler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -143,7 +215,23 @@ func (h *Handler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get active config
+	dslVersion := r.URL.Query().Get("dsl_version")
+
+	if dslVersion == "2" {
+		// Return DSL v2 (state-machine-based) config
+		dslConfigV2, err := h.configMgr.GetActiveConfigV2()
+		if err != nil {
+			log.Printf("Failed to get active v2 config: %v", err)
+			http.Error(w, "Failed to get config", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(dslConfigV2)
+		return
+	}
+
+	// Default: return DSL v1 config
 	dslConfig, err := h.configMgr.GetActiveConfig()
 	if err != nil {
 		log.Printf("Failed to get active config: %v", err)
@@ -279,8 +367,8 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 		req.PublishedBy = "admin"
 	}
 
-	// Publish config
-	cv, err := h.configMgr.PublishWorkflow(req.GraphJSON, req.DSLJSON, req.PublishedBy)
+	// Publish config (with optional v2 DSL)
+	cv, err := h.configMgr.PublishWorkflowV2(req.GraphJSON, req.DSLJSON, req.DSLV2JSON, req.PublishedBy)
 	if err != nil {
 		log.Printf("Failed to publish config: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to publish: %v", err), http.StatusInternalServerError)
@@ -794,6 +882,174 @@ func (h *Handler) HandleActivateOTELConfig(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// Workflow CRUD handlers
+
+// HandleCreateWorkflow creates a new workflow
+func (h *Handler) HandleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req CreateWorkflowRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	workflow := &db.Workflow{
+		ID:        req.ID,
+		Name:      req.Name,
+		Enabled:   req.Enabled,
+		GraphJSON: req.GraphJSON,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := h.db.CreateWorkflow(workflow); err != nil {
+		log.Printf("Failed to create workflow: %v", err)
+		http.Error(w, "Failed to create workflow", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(workflow)
+}
+
+// HandleGetWorkflow gets a specific workflow by ID
+func (h *Handler) HandleGetWorkflow(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	workflow, err := h.db.GetWorkflow(id)
+	if err != nil {
+		log.Printf("Failed to get workflow: %v", err)
+		http.Error(w, "Failed to get workflow", http.StatusInternalServerError)
+		return
+	}
+
+	if workflow == nil {
+		http.Error(w, "Workflow not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(workflow)
+}
+
+// HandleListWorkflows lists all workflows
+func (h *Handler) HandleListWorkflows(w http.ResponseWriter, r *http.Request) {
+	workflows, err := h.db.ListWorkflows()
+	if err != nil {
+		log.Printf("Failed to list workflows: %v", err)
+		http.Error(w, "Failed to list workflows", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"workflows": workflows,
+	})
+}
+
+// HandleUpdateWorkflow updates an existing workflow
+func (h *Handler) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	// Get existing workflow
+	workflow, err := h.db.GetWorkflow(id)
+	if err != nil {
+		log.Printf("Failed to get workflow: %v", err)
+		http.Error(w, "Failed to get workflow", http.StatusInternalServerError)
+		return
+	}
+	if workflow == nil {
+		http.Error(w, "Workflow not found", http.StatusNotFound)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req UpdateWorkflowRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Apply changes only for provided fields
+	if req.Name != "" {
+		workflow.Name = req.Name
+	}
+	if req.Enabled != nil {
+		workflow.Enabled = *req.Enabled
+	}
+	if req.GraphJSON != "" {
+		workflow.GraphJSON = req.GraphJSON
+	}
+
+	if err := h.db.UpdateWorkflow(workflow); err != nil {
+		log.Printf("Failed to update workflow: %v", err)
+		http.Error(w, "Failed to update workflow", http.StatusInternalServerError)
+		return
+	}
+
+	// Re-fetch to get the updated_at from the DB
+	workflow, err = h.db.GetWorkflow(id)
+	if err != nil {
+		log.Printf("Failed to get updated workflow: %v", err)
+		http.Error(w, "Failed to get updated workflow", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(workflow)
+}
+
+// HandleDeleteWorkflow deletes a workflow by ID
+func (h *Handler) HandleDeleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteWorkflow(id); err != nil {
+		log.Printf("Failed to delete workflow: %v", err)
+		http.Error(w, "Failed to delete workflow", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
+}
+
 // HandleGetConfigRolloutStatus returns configuration rollout status for device groups
 func (h *Handler) HandleGetConfigRolloutStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -862,5 +1118,452 @@ func (h *Handler) HandleGetConfigRolloutStatus(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"rollout_statuses": statuses,
+	})
+}
+
+// ============================================================================
+// Metrics & Funnel Ingest Endpoints
+// ============================================================================
+
+type MetricIngestRequest struct {
+	DeviceID string `json:"device_id"`
+	Metrics  []struct {
+		MetricName string            `json:"metric_name"`
+		MetricType string            `json:"metric_type"`
+		Value      float64           `json:"value"`
+		Labels     map[string]string `json:"labels"`
+		Timestamp  string            `json:"timestamp,omitempty"`
+	} `json:"metrics"`
+}
+
+func (h *Handler) HandleMetricsIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req MetricIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.DeviceID == "" {
+		http.Error(w, "device_id is required", http.StatusBadRequest)
+		return
+	}
+
+	var dbMetrics []db.DeviceMetric
+	for _, m := range req.Metrics {
+		ts := time.Now()
+		if m.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, m.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
+		labelsJSON, _ := json.Marshal(m.Labels)
+		dbMetrics = append(dbMetrics, db.DeviceMetric{
+			DeviceID:   req.DeviceID,
+			MetricName: m.MetricName,
+			MetricType: m.MetricType,
+			Value:      m.Value,
+			Labels:     string(labelsJSON),
+			Timestamp:  ts,
+		})
+	}
+
+	if err := h.db.InsertMetricBatch(dbMetrics); err != nil {
+		log.Printf("Failed to insert metrics: %v", err)
+		http.Error(w, "Failed to store metrics", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "ok",
+		"ingested": len(dbMetrics),
+	})
+}
+
+type FunnelIngestRequest struct {
+	DeviceID  string `json:"device_id"`
+	SessionID string `json:"session_id"`
+	Events    []struct {
+		FunnelName string `json:"funnel_name"`
+		StepIndex  int    `json:"step_index"`
+		StepName   string `json:"step_name"`
+		Timestamp  string `json:"timestamp,omitempty"`
+	} `json:"events"`
+}
+
+func (h *Handler) HandleFunnelsIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req FunnelIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.DeviceID == "" || req.SessionID == "" {
+		http.Error(w, "device_id and session_id are required", http.StatusBadRequest)
+		return
+	}
+
+	ingested := 0
+	for _, e := range req.Events {
+		ts := time.Now()
+		if e.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
+		fe := db.FunnelEvent{
+			DeviceID:   req.DeviceID,
+			FunnelName: e.FunnelName,
+			StepIndex:  e.StepIndex,
+			StepName:   e.StepName,
+			SessionID:  req.SessionID,
+			Timestamp:  ts,
+		}
+		if err := h.db.InsertFunnelEvent(fe); err != nil {
+			log.Printf("Failed to insert funnel event: %v", err)
+			continue
+		}
+		ingested++
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "ok",
+		"ingested": ingested,
+	})
+}
+
+// ============================================================================
+// Targeting Rules Endpoints
+// ============================================================================
+
+// HandleCreateTargetingRule creates a new targeting rule for a workflow
+func (h *Handler) HandleCreateTargetingRule(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req CreateTargetingRuleRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.WorkflowID == "" {
+		http.Error(w, "workflow_id required", http.StatusBadRequest)
+		return
+	}
+
+	if req.RulesJSON == "" {
+		req.RulesJSON = "{}"
+	}
+
+	rule := db.TargetingRule{
+		WorkflowID:  req.WorkflowID,
+		DeviceGroup: req.DeviceGroup,
+		RulesJSON:   req.RulesJSON,
+	}
+
+	if err := h.db.CreateTargetingRule(rule); err != nil {
+		log.Printf("Failed to create targeting rule: %v", err)
+		http.Error(w, "Failed to create targeting rule", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
+}
+
+// HandleListTargetingRules lists targeting rules for a workflow
+func (h *Handler) HandleListTargetingRules(w http.ResponseWriter, r *http.Request) {
+	workflowID := r.URL.Query().Get("workflow_id")
+	if workflowID == "" {
+		http.Error(w, "workflow_id required", http.StatusBadRequest)
+		return
+	}
+
+	rules, err := h.db.ListTargetingRules(workflowID)
+	if err != nil {
+		log.Printf("Failed to list targeting rules: %v", err)
+		http.Error(w, "Failed to list targeting rules", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"rules": rules,
+	})
+}
+
+// HandleDeleteTargetingRule deletes a targeting rule by ID
+func (h *Handler) HandleDeleteTargetingRule(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid id", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteTargetingRule(id); err != nil {
+		log.Printf("Failed to delete targeting rule: %v", err)
+		http.Error(w, "Failed to delete targeting rule", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
+}
+
+// ============================================================================
+// Buffer Config Endpoints
+// ============================================================================
+
+// HandleUpsertBufferConfig creates or updates a buffer configuration for a device group
+func (h *Handler) HandleUpsertBufferConfig(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req UpsertBufferConfigRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.DeviceGroup == "" {
+		http.Error(w, "device_group required", http.StatusBadRequest)
+		return
+	}
+
+	// Set defaults
+	if req.RAMEvents == 0 {
+		req.RAMEvents = 5000
+	}
+	if req.DiskMB == 0 {
+		req.DiskMB = 50
+	}
+	if req.RetentionHours == 0 {
+		req.RetentionHours = 24
+	}
+	if req.Strategy == "" {
+		req.Strategy = "overwrite_oldest"
+	}
+
+	config := db.BufferConfig{
+		DeviceGroup:    req.DeviceGroup,
+		RAMEvents:      req.RAMEvents,
+		DiskMB:         req.DiskMB,
+		RetentionHours: req.RetentionHours,
+		Strategy:       req.Strategy,
+	}
+
+	if err := h.db.UpsertBufferConfig(config); err != nil {
+		log.Printf("Failed to upsert buffer config: %v", err)
+		http.Error(w, "Failed to save buffer configuration", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
+}
+
+// HandleGetBufferConfig gets the buffer configuration for a device group
+func (h *Handler) HandleGetBufferConfig(w http.ResponseWriter, r *http.Request) {
+	deviceGroup := r.URL.Query().Get("device_group")
+	if deviceGroup == "" {
+		http.Error(w, "device_group required", http.StatusBadRequest)
+		return
+	}
+
+	config, err := h.db.GetBufferConfig(deviceGroup)
+	if err != nil {
+		log.Printf("Failed to get buffer config: %v", err)
+		http.Error(w, "Failed to get buffer configuration", http.StatusInternalServerError)
+		return
+	}
+
+	if config == nil {
+		http.Error(w, "No buffer configuration found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(config)
+}
+
+// HandleListBufferConfigs lists all buffer configurations
+func (h *Handler) HandleListBufferConfigs(w http.ResponseWriter, r *http.Request) {
+	configs, err := h.db.ListBufferConfigs()
+	if err != nil {
+		log.Printf("Failed to list buffer configs: %v", err)
+		http.Error(w, "Failed to list buffer configurations", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"buffer_configs": configs,
+	})
+}
+
+// ============================================================================
+// Fleet Intelligence Handlers
+// ============================================================================
+
+// HandleListCohorts returns all cohorts.
+func (h *Handler) HandleListCohorts(w http.ResponseWriter, r *http.Request) {
+	cohorts, err := h.cohortMgr.List()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(cohorts)
+}
+
+// HandleCreateCohort creates a new dynamic cohort.
+func (h *Handler) HandleCreateCohort(w http.ResponseWriter, r *http.Request) {
+	var c cohort.Cohort
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		http.Error(w, "invalid json", 400)
+		return
+	}
+	if err := h.cohortMgr.Create(c); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	w.WriteHeader(201)
+	json.NewEncoder(w).Encode(map[string]string{"status": "created", "id": c.ID})
+}
+
+// HandleDeleteCohort deletes a cohort.
+func (h *Handler) HandleDeleteCohort(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing id", 400)
+		return
+	}
+	if err := h.cohortMgr.Delete(id); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+// HandleGetCohortMembers returns device IDs in a cohort.
+func (h *Handler) HandleGetCohortMembers(w http.ResponseWriter, r *http.Request) {
+	cohortID := r.URL.Query().Get("id")
+	members, err := h.cohortMgr.GetMembers(cohortID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"cohort_id": cohortID, "members": members, "count": len(members)})
+}
+
+// HandleListCascades returns active cascade chains.
+func (h *Handler) HandleListCascades(w http.ResponseWriter, r *http.Request) {
+	chains, err := h.auditDB.GetActiveChains()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(chains)
+}
+
+// HandleKillSwitch engages the cascade kill switch.
+func (h *Handler) HandleKillSwitch(w http.ResponseWriter, r *http.Request) {
+	h.breakerState.EngageKillSwitch()
+	json.NewEncoder(w).Encode(map[string]string{"status": "kill_switch_engaged"})
+}
+
+// HandleResumeSwitch disengages the kill switch.
+func (h *Handler) HandleResumeSwitch(w http.ResponseWriter, r *http.Request) {
+	h.breakerState.DisengageKillSwitch()
+	json.NewEncoder(w).Encode(map[string]string{"status": "cascades_resumed"})
+}
+
+// HandleFleetEvents receives fleet events from the Collector.
+func (h *Handler) HandleFleetEvents(w http.ResponseWriter, r *http.Request) {
+	var events []fleet.FleetEvent
+	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
+		http.Error(w, "invalid json", 400)
+		return
+	}
+	ingested := 0
+	for _, event := range events {
+		if h.dedup.IsDuplicate(event.ID) {
+			continue
+		}
+		if h.pipeline.Ingest(event) {
+			ingested++
+		}
+	}
+	json.NewEncoder(w).Encode(map[string]int{"ingested": ingested, "total": len(events)})
+}
+
+// HandleGetPushStatus returns push channel stats.
+func (h *Handler) HandleGetPushStatus(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]any{
+		"websocket_connected": h.pushBroker.Registry().ConnectedCount(),
+	})
+}
+
+// HandleGetBreakerState returns circuit breaker status.
+func (h *Handler) HandleGetBreakerState(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]any{
+		"kill_switch":    h.breakerState.IsKillSwitchEngaged(),
+		"budget_percent": h.budgetMgr.CurrentPercent(),
+	})
+}
+
+// HandleGetWorkflowAudit returns the audit trail for a workflow.
+func (h *Handler) HandleGetWorkflowAudit(w http.ResponseWriter, r *http.Request) {
+	workflowID := r.URL.Query().Get("id")
+	entries, err := h.auditDB.ListWorkflowAudit(workflowID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(entries)
+}
+
+// HandleListFleetRules returns all registered fleet rules.
+func (h *Handler) HandleListFleetRules(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(h.ruleEngine.GetRules())
+}
+
+// HandleGetFleetCounters returns pipeline stats.
+func (h *Handler) HandleGetFleetCounters(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]any{
+		"queue_depth": h.pipeline.QueueDepth(),
+		"shed_count":  h.pipeline.ShedCount(),
 	})
 }
