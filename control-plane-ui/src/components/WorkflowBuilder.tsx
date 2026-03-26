@@ -7,10 +7,8 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   type Connection,
-  type Edge,
   type Node,
   type NodeTypes,
-  type OnDragOver,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -19,6 +17,17 @@ import { FlushWindowNode } from './nodes/FlushWindowNode';
 import { LogicNode } from './nodes/LogicNode';
 import { TriggerNode } from './nodes/TriggerNode';
 import { ActionNode } from './nodes/ActionNode';
+import { StateNodeComponent } from './nodes/StateNodeComponent';
+import { TimeoutMatcherNodeComponent } from './nodes/TimeoutMatcherNodeComponent';
+import { EmitMetricNodeComponent } from './nodes/EmitMetricNode';
+import { RecordSessionNodeComponent } from './nodes/RecordSessionNode';
+import { CreateFunnelNodeComponent } from './nodes/CreateFunnelNode';
+import { CreateSankeyNodeComponent } from './nodes/CreateSankeyNode';
+import { TakeScreenshotNodeComponent } from './nodes/TakeScreenshotNode';
+import { FleetTriggerNode } from './nodes/FleetTriggerNode';
+import { FleetActionNode } from './nodes/FleetActionNode';
+import { CohortTargetingNode } from './nodes/CohortTargetingNode';
+import { CircuitBreakerNode } from './nodes/CircuitBreakerNode';
 import type { WorkflowGraph } from '../types/workflow';
 
 // Node type definitions for the palette
@@ -221,6 +230,31 @@ const nodeTemplates = [
     defaultData: {},
   },
 
+  // State Machine
+  {
+    type: 'state',
+    category: 'States',
+    label: 'State',
+    icon: '◉',
+    description: 'FSM state container',
+    defaultData: {
+      stateName: 'idle',
+      isInitial: false,
+      color: '',
+    },
+  },
+  {
+    type: 'timeout_matcher',
+    category: 'States',
+    label: 'Timeout',
+    icon: '⏰',
+    description: 'Trigger on timeout (no event)',
+    defaultData: {
+      afterMs: 300000,
+      expectedEvent: '',
+    },
+  },
+
   // Actions
   {
     type: 'flush_window',
@@ -279,6 +313,239 @@ const nodeTemplates = [
       durationMinutes: 0,
     },
   },
+
+  // Insight Actions
+  {
+    type: 'emit_metric',
+    category: 'Insights',
+    label: 'Emit Metric',
+    icon: '📈',
+    description: 'Aggregate on-device metrics',
+    defaultData: {
+      metricName: '',
+      metricType: 'counter',
+      fieldExtract: '',
+      groupBy: [],
+      bucketBoundaries: [],
+    },
+  },
+  {
+    type: 'record_session',
+    category: 'Insights',
+    label: 'Record Session',
+    icon: '🎥',
+    description: 'Record session replay',
+    defaultData: {
+      keepStreamingUntil: '',
+      maxDurationMinutes: 5,
+    },
+  },
+  {
+    type: 'create_funnel',
+    category: 'Insights',
+    label: 'Create Funnel',
+    icon: '🔽',
+    description: 'Track conversion funnel',
+    defaultData: {
+      funnelName: '',
+      steps: [{ eventName: '' }],
+    },
+  },
+  {
+    type: 'create_sankey',
+    category: 'Insights',
+    label: 'Create Sankey',
+    icon: '🌊',
+    description: 'Track user journey flows',
+    defaultData: {
+      sankeyName: '',
+      entryEvent: '',
+      exitEvents: [],
+      trackedEvents: [],
+    },
+  },
+  {
+    type: 'take_screenshot',
+    category: 'Insights',
+    label: 'Take Screenshot',
+    icon: '\u{1F4F8}',
+    description: 'Capture screen state',
+    defaultData: {
+      quality: 'medium',
+      redactText: true,
+    },
+  },
+
+  // Fleet Triggers
+  {
+    type: 'fleet_threshold',
+    category: 'Fleet Triggers',
+    label: 'Fleet Threshold',
+    icon: '\u{1F4CA}',
+    description: 'Threshold of affected devices',
+    defaultData: { threshold: 10, triggerType: 'crash', windowMinutes: 5 },
+  },
+  {
+    type: 'fleet_rate',
+    category: 'Fleet Triggers',
+    label: 'Fleet Rate',
+    icon: '\u{1F4C8}',
+    description: 'Rate of change across fleet',
+    defaultData: { factor: 2.0, triggerType: 'error', baselineWindowMin: 60 },
+  },
+  {
+    type: 'fleet_absence',
+    category: 'Fleet Triggers',
+    label: 'Fleet Absence',
+    icon: '\u{1F47B}',
+    description: 'Silent devices detection',
+    defaultData: { minSilentDevices: 5, windowMinutes: 10 },
+  },
+  {
+    type: 'fleet_correlation',
+    category: 'Fleet Triggers',
+    label: 'Fleet Correlation',
+    icon: '\u{1F517}',
+    description: 'Cross-device pattern correlation',
+    defaultData: { patternType: 'temporal', windowSeconds: 300 },
+  },
+  {
+    type: 'fleet_anomaly',
+    category: 'Fleet Triggers',
+    label: 'Fleet Anomaly',
+    icon: '\u{1F52E}',
+    description: 'Fleet-wide anomaly detection',
+    defaultData: { metric: 'crash_rate', confidenceThreshold: 0.95 },
+  },
+  {
+    type: 'fleet_prediction',
+    category: 'Fleet Triggers',
+    label: 'Fleet Prediction',
+    icon: '\u{1F52D}',
+    description: 'Predictive fleet alerting',
+    defaultData: { metric: 'error_rate', lookaheadMinutes: 30 },
+  },
+  {
+    type: 'fleet_root_cause',
+    category: 'Fleet Triggers',
+    label: 'Fleet Root Cause',
+    icon: '\u{1F50D}',
+    description: 'Automated root cause analysis',
+    defaultData: { confidenceThreshold: 0.8 },
+  },
+
+  // Backend Triggers
+  {
+    type: 'backend_health',
+    category: 'Backend Triggers',
+    label: 'Backend Health',
+    icon: '\u{1F3E5}',
+    description: 'Backend service health check',
+    defaultData: { serviceName: '', metricType: 'error_rate', threshold: 0.05 },
+  },
+  {
+    type: 'backend_deploy',
+    category: 'Backend Triggers',
+    label: 'Backend Deploy',
+    icon: '\u{1F680}',
+    description: 'Backend deployment event',
+    defaultData: { serviceName: '' },
+  },
+  {
+    type: 'backend_capacity',
+    category: 'Backend Triggers',
+    label: 'Backend Capacity',
+    icon: '\u{26A1}',
+    description: 'Backend capacity alert',
+    defaultData: { serviceName: '' },
+  },
+
+  // Fleet Actions
+  {
+    type: 'fleet_flush',
+    category: 'Fleet Actions',
+    label: 'Fleet Flush',
+    icon: '\u{1F4BE}',
+    description: 'Flush buffers across fleet',
+    defaultData: { minutes: 5, scope: 'cohort' },
+  },
+  {
+    type: 'fleet_set_sampling',
+    category: 'Fleet Actions',
+    label: 'Fleet Sampling',
+    icon: '\u{1F39A}\uFE0F',
+    description: 'Adjust fleet sampling rate',
+    defaultData: { rate: 100, durationMinutes: 15 },
+  },
+  {
+    type: 'fleet_adjust_config',
+    category: 'Fleet Actions',
+    label: 'Fleet Config',
+    icon: '\u{2699}\uFE0F',
+    description: 'Push config change to fleet',
+    defaultData: { key: '', value: '', durationMinutes: 30 },
+  },
+  {
+    type: 'fleet_screenshot',
+    category: 'Fleet Actions',
+    label: 'Fleet Screenshot',
+    icon: '\u{1F4F8}',
+    description: 'Capture screenshots across fleet',
+    defaultData: {},
+  },
+  {
+    type: 'fleet_client_circuit_break',
+    category: 'Fleet Actions',
+    label: 'Client Circuit Break',
+    icon: '\u{1F50C}',
+    description: 'Circuit break client telemetry',
+    defaultData: { action: 'pause_export' },
+  },
+
+  // Cohort Targeting
+  {
+    type: 'cohort_static',
+    category: 'Cohort Targeting',
+    label: 'Static Cohort',
+    icon: '\u{1F4CB}',
+    description: 'Target a static device group',
+    defaultData: { deviceGroup: '' },
+  },
+  {
+    type: 'cohort_dynamic',
+    category: 'Cohort Targeting',
+    label: 'Dynamic Cohort',
+    icon: '\u{1F504}',
+    description: 'Target by dynamic rules',
+    defaultData: { rulesJson: '{}' },
+  },
+  {
+    type: 'cohort_discovered',
+    category: 'Cohort Targeting',
+    label: 'Discovered Cohort',
+    icon: '\u{1F916}',
+    description: 'ML-discovered device cluster',
+    defaultData: { clusterId: '' },
+  },
+
+  // Safety
+  {
+    type: 'circuit_breaker_config',
+    category: 'Safety',
+    label: 'Circuit Breakers',
+    icon: '\u{1F6E1}\uFE0F',
+    description: 'Fleet safety guardrails',
+    defaultData: {
+      maxCascadeDepth: 3,
+      cooldownMinutes: 15,
+      maxPercentAffected: 25,
+      maxAbsoluteDevices: 10000,
+      budgetWindowMinutes: 60,
+      maxAlertsPerHour: 10,
+      chainTimeoutMinutes: 30,
+      hopTimeoutMinutes: 5,
+    },
+  },
 ];
 
 interface WorkflowBuilderProps {
@@ -327,12 +594,52 @@ export function WorkflowBuilder({ workflow, onChange }: WorkflowBuilderProps) {
       any: LogicNode,
       all: LogicNode,
 
+      // State Machine Nodes
+      state: StateNodeComponent,
+      timeout_matcher: TimeoutMatcherNodeComponent,
+
       // Actions
       flush_window: FlushWindowNode,
       set_sampling: ActionNode,
       annotate_trigger: ActionNode,
       send_alert: ActionNode,
       adjust_config: ActionNode,
+
+      // Insight Actions
+      emit_metric: EmitMetricNodeComponent,
+      record_session: RecordSessionNodeComponent,
+      create_funnel: CreateFunnelNodeComponent,
+      create_sankey: CreateSankeyNodeComponent,
+      take_screenshot: TakeScreenshotNodeComponent,
+
+      // Fleet Triggers
+      fleet_threshold: FleetTriggerNode,
+      fleet_rate: FleetTriggerNode,
+      fleet_absence: FleetTriggerNode,
+      fleet_correlation: FleetTriggerNode,
+      fleet_anomaly: FleetTriggerNode,
+      fleet_prediction: FleetTriggerNode,
+      fleet_root_cause: FleetTriggerNode,
+
+      // Backend Triggers
+      backend_health: FleetTriggerNode,
+      backend_deploy: FleetTriggerNode,
+      backend_capacity: FleetTriggerNode,
+
+      // Fleet Actions
+      fleet_flush: FleetActionNode,
+      fleet_set_sampling: FleetActionNode,
+      fleet_adjust_config: FleetActionNode,
+      fleet_screenshot: FleetActionNode,
+      fleet_client_circuit_break: FleetActionNode,
+
+      // Cohort Targeting
+      cohort_static: CohortTargetingNode,
+      cohort_dynamic: CohortTargetingNode,
+      cohort_discovered: CohortTargetingNode,
+
+      // Safety
+      circuit_breaker_config: CircuitBreakerNode,
     }),
     []
   );
@@ -379,7 +686,7 @@ export function WorkflowBuilder({ workflow, onChange }: WorkflowBuilderProps) {
     event.dataTransfer.effectAllowed = 'move';
   };
 
-  const onDragOver: OnDragOver = useCallback((event) => {
+  const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   }, []);
@@ -433,7 +740,14 @@ export function WorkflowBuilder({ workflow, onChange }: WorkflowBuilderProps) {
             'Crash/Error',
             'Predictive',
             'Logic',
+            'States',
             'Actions',
+            'Insights',
+            'Fleet Triggers',
+            'Backend Triggers',
+            'Fleet Actions',
+            'Cohort Targeting',
+            'Safety',
           ].map((category) => (
             <div key={category} className="palette-section">
               <div className="palette-category">{category}</div>

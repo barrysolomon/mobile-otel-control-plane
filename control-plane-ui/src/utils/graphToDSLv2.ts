@@ -10,6 +10,22 @@ import type {
   DSLMatcherType,
   DSLActionV2,
 } from '../types/workflow';
+import type {
+  FleetThresholdNode,
+  FleetRateNode,
+  FleetAbsenceNode,
+  FleetCorrelationNode,
+  FleetAnomalyNode,
+  FleetPredictionNode,
+  FleetRootCauseNode,
+  BackendHealthNode,
+  BackendDeployNode,
+  BackendCapacityNode,
+  FleetFlushNode,
+  FleetSetSamplingNode,
+  FleetAdjustConfigNode,
+  FleetClientCircuitBreakNode,
+} from '../types/fleet';
 
 /**
  * Compiles an array of visual workflow graphs into a DSL v2 config
@@ -358,7 +374,102 @@ function nodeToMatcher(
         },
       };
 
-    // State and action nodes are not matchers
+    // Fleet Triggers
+    case 'fleet_threshold':
+      return {
+        type: 'fleet_threshold' as DSLMatcherType,
+        config: {
+          threshold: (node as FleetThresholdNode).data.threshold,
+          trigger_type: (node as FleetThresholdNode).data.triggerType,
+          window_minutes: (node as FleetThresholdNode).data.windowMinutes,
+          ...(( node as FleetThresholdNode).data.cohortId && {
+            cohort_id: (node as FleetThresholdNode).data.cohortId,
+          }),
+        },
+      };
+
+    case 'fleet_rate':
+      return {
+        type: 'fleet_rate' as DSLMatcherType,
+        config: {
+          factor: (node as FleetRateNode).data.factor,
+          trigger_type: (node as FleetRateNode).data.triggerType,
+          baseline_window_min: (node as FleetRateNode).data.baselineWindowMin,
+        },
+      };
+
+    case 'fleet_absence':
+      return {
+        type: 'fleet_absence' as DSLMatcherType,
+        config: {
+          min_silent_devices: (node as FleetAbsenceNode).data.minSilentDevices,
+          window_minutes: (node as FleetAbsenceNode).data.windowMinutes,
+        },
+      };
+
+    case 'fleet_correlation':
+      return {
+        type: 'fleet_correlation' as DSLMatcherType,
+        config: {
+          pattern_type: (node as FleetCorrelationNode).data.patternType,
+          window_seconds: (node as FleetCorrelationNode).data.windowSeconds,
+        },
+      };
+
+    case 'fleet_anomaly':
+      return {
+        type: 'fleet_anomaly' as DSLMatcherType,
+        config: {
+          metric: (node as FleetAnomalyNode).data.metric,
+          confidence_threshold: (node as FleetAnomalyNode).data.confidenceThreshold,
+        },
+      };
+
+    case 'fleet_prediction':
+      return {
+        type: 'fleet_prediction' as DSLMatcherType,
+        config: {
+          metric: (node as FleetPredictionNode).data.metric,
+          lookahead_minutes: (node as FleetPredictionNode).data.lookaheadMinutes,
+        },
+      };
+
+    case 'fleet_root_cause':
+      return {
+        type: 'fleet_root_cause' as DSLMatcherType,
+        config: {
+          confidence_threshold: (node as FleetRootCauseNode).data.confidenceThreshold,
+        },
+      };
+
+    // Backend Triggers
+    case 'backend_health':
+      return {
+        type: 'backend_health' as DSLMatcherType,
+        config: {
+          service_name: (node as BackendHealthNode).data.serviceName,
+          metric_type: (node as BackendHealthNode).data.metricType,
+          threshold: (node as BackendHealthNode).data.threshold,
+        },
+      };
+
+    case 'backend_deploy':
+      return {
+        type: 'backend_deploy' as DSLMatcherType,
+        config: {
+          service_name: (node as BackendDeployNode).data.serviceName,
+        },
+      };
+
+    case 'backend_capacity':
+      return {
+        type: 'backend_capacity' as DSLMatcherType,
+        config: {
+          service_name: (node as BackendCapacityNode).data.serviceName,
+        },
+      };
+
+    // State, action, cohort, and safety nodes are not matchers
     case 'state':
     case 'annotate_trigger':
     case 'flush_window':
@@ -370,6 +481,15 @@ function nodeToMatcher(
     case 'create_funnel':
     case 'create_sankey':
     case 'take_screenshot':
+    case 'fleet_flush':
+    case 'fleet_set_sampling':
+    case 'fleet_adjust_config':
+    case 'fleet_screenshot':
+    case 'fleet_client_circuit_break':
+    case 'cohort_static':
+    case 'cohort_dynamic':
+    case 'cohort_discovered':
+    case 'circuit_breaker_config':
       return null;
   }
 }
@@ -389,6 +509,11 @@ const ACTION_TYPES = new Set([
   'create_funnel',
   'create_sankey',
   'take_screenshot',
+  'fleet_flush',
+  'fleet_set_sampling',
+  'fleet_adjust_config',
+  'fleet_screenshot',
+  'fleet_client_circuit_break',
 ]);
 
 function isActionNode(node: GraphNode): boolean {
@@ -526,6 +651,49 @@ function nodeToActionV2(node: GraphNode): DSLActionV2 | null {
         config: {
           quality: node.data.quality,
           redact_text: node.data.redactText,
+        },
+      };
+
+    // Fleet Actions
+    case 'fleet_flush':
+      return {
+        type: 'fleet_flush' as DSLActionV2['type'],
+        config: {
+          minutes: (node as FleetFlushNode).data.minutes,
+          scope: (node as FleetFlushNode).data.scope,
+        },
+      };
+
+    case 'fleet_set_sampling':
+      return {
+        type: 'fleet_set_sampling' as DSLActionV2['type'],
+        config: {
+          rate: (node as FleetSetSamplingNode).data.rate,
+          duration_minutes: (node as FleetSetSamplingNode).data.durationMinutes,
+        },
+      };
+
+    case 'fleet_adjust_config':
+      return {
+        type: 'fleet_adjust_config' as DSLActionV2['type'],
+        config: {
+          key: (node as FleetAdjustConfigNode).data.key,
+          value: (node as FleetAdjustConfigNode).data.value,
+          duration_minutes: (node as FleetAdjustConfigNode).data.durationMinutes,
+        },
+      };
+
+    case 'fleet_screenshot':
+      return {
+        type: 'fleet_screenshot' as DSLActionV2['type'],
+        config: {},
+      };
+
+    case 'fleet_client_circuit_break':
+      return {
+        type: 'fleet_client_circuit_break' as DSLActionV2['type'],
+        config: {
+          action: (node as FleetClientCircuitBreakNode).data.action,
         },
       };
 

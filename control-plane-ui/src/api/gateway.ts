@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ConfigVersion, DSLConfig, WorkflowGraph } from '../types/workflow';
+import type { ConfigVersion, DSLConfig, DSLConfigV2, WorkflowGraph } from '../types/workflow';
 
 const api = axios.create({
   baseURL: '/api',
@@ -11,6 +11,7 @@ const api = axios.create({
 export interface PublishRequest {
   graph_json: string;
   dsl_json: string;
+  dsl_v2_json?: string;
   published_by: string;
 }
 
@@ -36,17 +37,21 @@ export const gatewayAPI = {
     return response.data;
   },
 
-  // Publish new workflow version
+  // Publish new workflow version (v1 DSL required, v2 optional)
   async publish(
     graphs: WorkflowGraph[],
     dslConfig: DSLConfig,
-    publishedBy: string
+    publishedBy: string,
+    dslConfigV2?: DSLConfigV2
   ): Promise<PublishResponse> {
     const request: PublishRequest = {
       graph_json: JSON.stringify(graphs),
       dsl_json: JSON.stringify(dslConfig),
       published_by: publishedBy,
     };
+    if (dslConfigV2) {
+      request.dsl_v2_json = JSON.stringify(dslConfigV2);
+    }
 
     const response = await api.post<PublishResponse>('/admin/publish', request);
     return response.data;
@@ -63,7 +68,7 @@ export const gatewayAPI = {
     const response = await api.get<VersionsResponse>(
       `/admin/versions?limit=${limit}`
     );
-    return response.versions;
+    return response.data.versions;
   },
 
   // Health check
@@ -160,6 +165,159 @@ export const gatewayAPI = {
 
   async getConfigRolloutStatus(): Promise<any> {
     const response = await api.get('/v1/otel-configs/rollout-status');
+    return response.data;
+  },
+
+  // Workflow CRUD
+  async createWorkflow(workflow: WorkflowGraph): Promise<any> {
+    const response = await api.post('/v1/workflows', {
+      id: workflow.id,
+      name: workflow.name,
+      enabled: workflow.enabled,
+      graph_json: JSON.stringify(workflow),
+    });
+    return response.data;
+  },
+
+  async getWorkflow(id: string): Promise<WorkflowGraph> {
+    const response = await api.get('/v1/workflows/detail', { params: { id } });
+    return JSON.parse(response.data.graph_json);
+  },
+
+  async listWorkflows(): Promise<WorkflowGraph[]> {
+    const response = await api.get('/v1/workflows');
+    const workflows = response.data.workflows || [];
+    return workflows.map((w: any) => JSON.parse(w.graph_json));
+  },
+
+  async updateWorkflow(workflow: WorkflowGraph): Promise<any> {
+    const response = await api.put('/v1/workflows/detail', {
+      name: workflow.name,
+      enabled: workflow.enabled,
+      graph_json: JSON.stringify(workflow),
+    }, { params: { id: workflow.id } });
+    return response.data;
+  },
+
+  async deleteWorkflow(id: string): Promise<void> {
+    await api.delete('/v1/workflows/detail', { params: { id } });
+  },
+
+  // Targeting rules
+  async createTargetingRule(data: {
+    workflow_id: string;
+    device_group: string;
+    rules_json: string;
+  }): Promise<any> {
+    const response = await api.post('/v1/targeting-rules', data);
+    return response.data;
+  },
+
+  async listTargetingRules(workflowId: string): Promise<any> {
+    const response = await api.get('/v1/targeting-rules', {
+      params: { workflow_id: workflowId }
+    });
+    return response.data;
+  },
+
+  async deleteTargetingRule(id: number): Promise<void> {
+    await api.delete('/v1/targeting-rules', { params: { id } });
+  },
+
+  // Buffer configs
+  async upsertBufferConfig(data: {
+    device_group: string;
+    ram_events: number;
+    disk_mb: number;
+    retention_hours: number;
+    strategy: string;
+  }): Promise<any> {
+    const response = await api.post('/v1/buffer-configs', data);
+    return response.data;
+  },
+
+  async getBufferConfig(deviceGroup: string): Promise<any> {
+    const response = await api.get('/v1/buffer-configs', {
+      params: { device_group: deviceGroup }
+    });
+    return response.data;
+  },
+
+  async listBufferConfigs(): Promise<any> {
+    const response = await api.get('/v1/buffer-configs/list');
+    return response.data;
+  },
+
+  // Metrics ingest (from devices)
+  async ingestMetrics(data: {
+    device_id: string;
+    metrics: { metric_name: string; metric_type: string; value: number; labels: Record<string, string> }[];
+  }): Promise<any> {
+    const response = await api.post('/v1/metrics/ingest', data);
+    return response.data;
+  },
+
+  // Funnel ingest (from devices)
+  async ingestFunnelEvents(data: {
+    device_id: string;
+    session_id: string;
+    events: { funnel_name: string; step_index: number; step_name: string }[];
+  }): Promise<any> {
+    const response = await api.post('/v1/funnels/ingest', data);
+    return response.data;
+  },
+
+  // Cohort Management
+  async listCohorts(): Promise<any> {
+    const response = await api.get('/v1/cohorts');
+    return response.data;
+  },
+
+  async createCohort(cohort: any): Promise<any> {
+    const response = await api.post('/v1/cohorts', cohort);
+    return response.data;
+  },
+
+  async deleteCohort(id: string): Promise<any> {
+    const response = await api.delete('/v1/cohorts', { params: { id } });
+    return response.data;
+  },
+
+  async getCohortMembers(id: string): Promise<any> {
+    const response = await api.get('/v1/cohorts/members', { params: { id } });
+    return response.data;
+  },
+
+  // Cascade Management
+  async listCascades(): Promise<any> {
+    const response = await api.get('/v1/cascades');
+    return response.data;
+  },
+
+  async killSwitch(): Promise<any> {
+    const response = await api.post('/admin/cascade/kill');
+    return response.data;
+  },
+
+  async resumeCascades(): Promise<any> {
+    const response = await api.post('/admin/cascade/resume');
+    return response.data;
+  },
+
+  async getBreakerState(): Promise<any> {
+    const response = await api.get('/admin/cascade/breaker-state');
+    return response.data;
+  },
+
+  // Push Status
+  async getPushStatus(): Promise<any> {
+    const response = await api.get('/v1/push/status');
+    return response.data;
+  },
+
+  // Workflow Audit
+  async getWorkflowAudit(id: string): Promise<any> {
+    const response = await api.get('/v1/workflows/audit', { params: { id } });
     return response.data;
   },
 };
