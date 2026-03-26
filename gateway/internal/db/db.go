@@ -29,6 +29,7 @@ type ConfigVersion struct {
 	Version     int       `json:"version"`
 	GraphJSON   string    `json:"graph_json"`
 	DSLJSON     string    `json:"dsl_json"`
+	DSLV2JSON   string    `json:"dsl_v2_json"`
 	PublishedAt time.Time `json:"published_at"`
 	PublishedBy string    `json:"published_by"`
 	IsActive    bool      `json:"is_active"`
@@ -54,6 +55,15 @@ type DeviceGroup struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type Workflow struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	GraphJSON string    `json:"graph_json"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type OTELConfiguration struct {
 	ID                     int       `json:"id"`
 	DeviceGroup            string    `json:"device_group"`
@@ -72,6 +82,43 @@ type OTELConfiguration struct {
 	CreatedAt              time.Time `json:"created_at"`
 	CreatedBy              string    `json:"created_by"`
 	IsActive               bool      `json:"is_active"`
+}
+
+type DeviceMetric struct {
+	ID         int       `json:"id"`
+	DeviceID   string    `json:"device_id"`
+	MetricName string    `json:"metric_name"`
+	MetricType string    `json:"metric_type"` // counter, histogram, gauge
+	Value      float64   `json:"value"`
+	Labels     string    `json:"labels"` // JSON object
+	Timestamp  time.Time `json:"timestamp"`
+}
+
+type FunnelEvent struct {
+	ID         int       `json:"id"`
+	DeviceID   string    `json:"device_id"`
+	FunnelName string    `json:"funnel_name"`
+	StepIndex  int       `json:"step_index"`
+	StepName   string    `json:"step_name"`
+	SessionID  string    `json:"session_id"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
+type TargetingRule struct {
+	ID          int       `json:"id"`
+	WorkflowID  string    `json:"workflow_id"`
+	DeviceGroup string    `json:"device_group"`
+	RulesJSON   string    `json:"rules_json"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type BufferConfig struct {
+	DeviceGroup    string    `json:"device_group"`
+	RAMEvents      int       `json:"ram_events"`
+	DiskMB         int       `json:"disk_mb"`
+	RetentionHours int       `json:"retention_hours"`
+	Strategy       string    `json:"strategy"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func NewDatabase(path string) (*Database, error) {
@@ -99,6 +146,7 @@ func (db *Database) migrate() error {
 		version INTEGER PRIMARY KEY AUTOINCREMENT,
 		graph_json TEXT NOT NULL,
 		dsl_json TEXT NOT NULL,
+		dsl_v2_json TEXT NOT NULL DEFAULT '',
 		published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		published_by TEXT DEFAULT 'system',
 		is_active BOOLEAN DEFAULT 0
@@ -178,10 +226,118 @@ func (db *Database) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_otel_configs_active
 		ON otel_configurations(is_active) WHERE is_active = 1;
+
+	CREATE TABLE IF NOT EXISTS workflows (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		enabled BOOLEAN DEFAULT 1,
+		graph_json TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS device_metrics (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_id TEXT NOT NULL,
+		metric_name TEXT NOT NULL,
+		metric_type TEXT NOT NULL DEFAULT 'counter',
+		value REAL NOT NULL,
+		labels TEXT NOT NULL DEFAULT '{}',
+		timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_device_metrics_name ON device_metrics(metric_name, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_device_metrics_device ON device_metrics(device_id, timestamp);
+
+	CREATE TABLE IF NOT EXISTS funnel_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_id TEXT NOT NULL,
+		funnel_name TEXT NOT NULL,
+		step_index INTEGER NOT NULL,
+		step_name TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_funnel_events_funnel ON funnel_events(funnel_name, step_index, timestamp);
+
+	CREATE TABLE IF NOT EXISTS targeting_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		workflow_id TEXT NOT NULL,
+		device_group TEXT NOT NULL DEFAULT '',
+		rules_json TEXT NOT NULL DEFAULT '{}',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS buffer_configs (
+		device_group TEXT PRIMARY KEY,
+		ram_events INTEGER NOT NULL DEFAULT 5000,
+		disk_mb INTEGER NOT NULL DEFAULT 50,
+		retention_hours INTEGER NOT NULL DEFAULT 24,
+		strategy TEXT NOT NULL DEFAULT 'overwrite_oldest',
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS cohorts (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		type TEXT NOT NULL CHECK(type IN ('static','dynamic','discovered')),
+		rules_json TEXT,
+		source_cluster_id TEXT,
+		device_count INTEGER DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS cohort_memberships (
+		cohort_id TEXT REFERENCES cohorts(id) ON DELETE CASCADE,
+		device_id TEXT NOT NULL,
+		joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (cohort_id, device_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_cohort_members_device ON cohort_memberships(device_id);
+
+	CREATE TABLE IF NOT EXISTS fleet_rules (
+		id TEXT PRIMARY KEY,
+		workflow_id TEXT NOT NULL,
+		rule_type TEXT NOT NULL,
+		cohort_id TEXT,
+		config_json TEXT NOT NULL,
+		enabled BOOLEAN DEFAULT TRUE,
+		priority INTEGER DEFAULT 2,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS device_push_state (
+		device_id TEXT PRIMARY KEY,
+		ws_connected BOOLEAN DEFAULT FALSE,
+		ws_connected_at TIMESTAMP,
+		fcm_token TEXT,
+		fcm_token_updated_at TIMESTAMP,
+		last_push_channel TEXT CHECK(last_push_channel IN ('websocket','fcm','poll')),
+		attributes_json TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS pending_fleet_alerts (
+		fetch_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		alert_json TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL,
+		fetched_at TIMESTAMP,
+		expires_at TIMESTAMP NOT NULL
+	);
 	`
 
 	_, err := db.conn.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add new columns to devices table — ignore errors since columns may already exist
+	db.conn.Exec("ALTER TABLE devices ADD COLUMN sdk_version TEXT DEFAULT ''")
+	db.conn.Exec("ALTER TABLE devices ADD COLUMN capabilities TEXT DEFAULT ''")
+
+	return nil
 }
 
 func (db *Database) Close() error {
@@ -193,12 +349,12 @@ func (db *Database) Close() error {
 func (db *Database) GetActiveConfig() (*ConfigVersion, error) {
 	var cv ConfigVersion
 	err := db.conn.QueryRow(`
-		SELECT version, graph_json, dsl_json, published_at, published_by, is_active
+		SELECT version, graph_json, dsl_json, COALESCE(dsl_v2_json, ''), published_at, published_by, is_active
 		FROM config_versions
 		WHERE is_active = 1
 		ORDER BY version DESC
 		LIMIT 1
-	`).Scan(&cv.Version, &cv.GraphJSON, &cv.DSLJSON, &cv.PublishedAt, &cv.PublishedBy, &cv.IsActive)
+	`).Scan(&cv.Version, &cv.GraphJSON, &cv.DSLJSON, &cv.DSLV2JSON, &cv.PublishedAt, &cv.PublishedBy, &cv.IsActive)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -213,10 +369,10 @@ func (db *Database) GetActiveConfig() (*ConfigVersion, error) {
 func (db *Database) GetConfigByVersion(version int) (*ConfigVersion, error) {
 	var cv ConfigVersion
 	err := db.conn.QueryRow(`
-		SELECT version, graph_json, dsl_json, published_at, published_by, is_active
+		SELECT version, graph_json, dsl_json, COALESCE(dsl_v2_json, ''), published_at, published_by, is_active
 		FROM config_versions
 		WHERE version = ?
-	`, version).Scan(&cv.Version, &cv.GraphJSON, &cv.DSLJSON, &cv.PublishedAt, &cv.PublishedBy, &cv.IsActive)
+	`, version).Scan(&cv.Version, &cv.GraphJSON, &cv.DSLJSON, &cv.DSLV2JSON, &cv.PublishedAt, &cv.PublishedBy, &cv.IsActive)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -228,7 +384,7 @@ func (db *Database) GetConfigByVersion(version int) (*ConfigVersion, error) {
 	return &cv, nil
 }
 
-func (db *Database) PublishConfig(graphJSON, dslJSON, publishedBy string) (*ConfigVersion, error) {
+func (db *Database) PublishConfig(graphJSON, dslJSON, dslV2JSON, publishedBy string) (*ConfigVersion, error) {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return nil, err
@@ -243,9 +399,9 @@ func (db *Database) PublishConfig(graphJSON, dslJSON, publishedBy string) (*Conf
 
 	// Insert new config
 	result, err := tx.Exec(`
-		INSERT INTO config_versions (graph_json, dsl_json, published_by, is_active)
-		VALUES (?, ?, ?, 1)
-	`, graphJSON, dslJSON, publishedBy)
+		INSERT INTO config_versions (graph_json, dsl_json, dsl_v2_json, published_by, is_active)
+		VALUES (?, ?, ?, ?, 1)
+	`, graphJSON, dslJSON, dslV2JSON, publishedBy)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +453,7 @@ func (db *Database) ListVersions(limit int) ([]ConfigVersion, error) {
 	}
 
 	rows, err := db.conn.Query(`
-		SELECT version, graph_json, dsl_json, published_at, published_by, is_active
+		SELECT version, graph_json, dsl_json, COALESCE(dsl_v2_json, ''), published_at, published_by, is_active
 		FROM config_versions
 		ORDER BY version DESC
 		LIMIT ?
@@ -310,7 +466,7 @@ func (db *Database) ListVersions(limit int) ([]ConfigVersion, error) {
 	var versions []ConfigVersion
 	for rows.Next() {
 		var cv ConfigVersion
-		if err := rows.Scan(&cv.Version, &cv.GraphJSON, &cv.DSLJSON, &cv.PublishedAt, &cv.PublishedBy, &cv.IsActive); err != nil {
+		if err := rows.Scan(&cv.Version, &cv.GraphJSON, &cv.DSLJSON, &cv.DSLV2JSON, &cv.PublishedAt, &cv.PublishedBy, &cv.IsActive); err != nil {
 			return nil, err
 		}
 		versions = append(versions, cv)
@@ -719,4 +875,267 @@ func (db *Database) ActivateOTELConfig(id int) error {
 	}
 
 	return tx.Commit()
+}
+
+// Workflow operations
+
+func (db *Database) CreateWorkflow(w *Workflow) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO workflows (id, name, enabled, graph_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, w.ID, w.Name, w.Enabled, w.GraphJSON, w.CreatedAt, w.UpdatedAt)
+
+	return err
+}
+
+func (db *Database) GetWorkflow(id string) (*Workflow, error) {
+	var w Workflow
+	err := db.conn.QueryRow(`
+		SELECT id, name, enabled, graph_json, created_at, updated_at
+		FROM workflows
+		WHERE id = ?
+	`, id).Scan(&w.ID, &w.Name, &w.Enabled, &w.GraphJSON, &w.CreatedAt, &w.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &w, nil
+}
+
+func (db *Database) ListWorkflows() ([]Workflow, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, name, enabled, graph_json, created_at, updated_at
+		FROM workflows
+		ORDER BY updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var workflows []Workflow
+	for rows.Next() {
+		var w Workflow
+		if err := rows.Scan(&w.ID, &w.Name, &w.Enabled, &w.GraphJSON, &w.CreatedAt, &w.UpdatedAt); err != nil {
+			return nil, err
+		}
+		workflows = append(workflows, w)
+	}
+
+	return workflows, rows.Err()
+}
+
+func (db *Database) UpdateWorkflow(w *Workflow) error {
+	_, err := db.conn.Exec(`
+		UPDATE workflows
+		SET name = ?, enabled = ?, graph_json = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, w.Name, w.Enabled, w.GraphJSON, w.ID)
+
+	return err
+}
+
+func (db *Database) DeleteWorkflow(id string) error {
+	_, err := db.conn.Exec(`
+		DELETE FROM workflows WHERE id = ?
+	`, id)
+
+	return err
+}
+
+// Metrics operations
+
+func (db *Database) InsertMetric(m DeviceMetric) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO device_metrics (device_id, metric_name, metric_type, value, labels, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, m.DeviceID, m.MetricName, m.MetricType, m.Value, m.Labels, m.Timestamp)
+	return err
+}
+
+func (db *Database) InsertMetricBatch(metrics []DeviceMetric) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO device_metrics (device_id, metric_name, metric_type, value, labels, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, m := range metrics {
+		if _, err := stmt.Exec(m.DeviceID, m.MetricName, m.MetricType, m.Value, m.Labels, m.Timestamp); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (db *Database) QueryMetrics(metricName string, start, end time.Time, limit int) ([]DeviceMetric, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, device_id, metric_name, metric_type, value, labels, timestamp
+		FROM device_metrics
+		WHERE metric_name = ? AND timestamp >= ? AND timestamp <= ?
+		ORDER BY timestamp DESC
+		LIMIT ?
+	`, metricName, start, end, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var metrics []DeviceMetric
+	for rows.Next() {
+		var m DeviceMetric
+		if err := rows.Scan(&m.ID, &m.DeviceID, &m.MetricName, &m.MetricType, &m.Value, &m.Labels, &m.Timestamp); err != nil {
+			return nil, err
+		}
+		metrics = append(metrics, m)
+	}
+	return metrics, nil
+}
+
+// Funnel operations
+
+func (db *Database) InsertFunnelEvent(f FunnelEvent) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO funnel_events (device_id, funnel_name, step_index, step_name, session_id, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, f.DeviceID, f.FunnelName, f.StepIndex, f.StepName, f.SessionID, f.Timestamp)
+	return err
+}
+
+func (db *Database) QueryFunnelEvents(funnelName string, start, end time.Time) ([]FunnelEvent, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, device_id, funnel_name, step_index, step_name, session_id, timestamp
+		FROM funnel_events
+		WHERE funnel_name = ? AND timestamp >= ? AND timestamp <= ?
+		ORDER BY step_index ASC, timestamp DESC
+	`, funnelName, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []FunnelEvent
+	for rows.Next() {
+		var f FunnelEvent
+		if err := rows.Scan(&f.ID, &f.DeviceID, &f.FunnelName, &f.StepIndex, &f.StepName, &f.SessionID, &f.Timestamp); err != nil {
+			return nil, err
+		}
+		events = append(events, f)
+	}
+	return events, nil
+}
+
+// Targeting rule operations
+
+func (db *Database) CreateTargetingRule(rule TargetingRule) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO targeting_rules (workflow_id, device_group, rules_json)
+		VALUES (?, ?, ?)
+	`, rule.WorkflowID, rule.DeviceGroup, rule.RulesJSON)
+
+	return err
+}
+
+func (db *Database) ListTargetingRules(workflowID string) ([]TargetingRule, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, workflow_id, device_group, rules_json, created_at
+		FROM targeting_rules
+		WHERE workflow_id = ?
+		ORDER BY created_at DESC
+	`, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rules []TargetingRule
+	for rows.Next() {
+		var r TargetingRule
+		if err := rows.Scan(&r.ID, &r.WorkflowID, &r.DeviceGroup, &r.RulesJSON, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		rules = append(rules, r)
+	}
+
+	return rules, rows.Err()
+}
+
+func (db *Database) DeleteTargetingRule(id int) error {
+	_, err := db.conn.Exec(`
+		DELETE FROM targeting_rules WHERE id = ?
+	`, id)
+
+	return err
+}
+
+// Buffer config operations
+
+func (db *Database) UpsertBufferConfig(config BufferConfig) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO buffer_configs (device_group, ram_events, disk_mb, retention_hours, strategy, updated_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(device_group) DO UPDATE SET
+			ram_events = excluded.ram_events,
+			disk_mb = excluded.disk_mb,
+			retention_hours = excluded.retention_hours,
+			strategy = excluded.strategy,
+			updated_at = CURRENT_TIMESTAMP
+	`, config.DeviceGroup, config.RAMEvents, config.DiskMB, config.RetentionHours, config.Strategy)
+
+	return err
+}
+
+func (db *Database) GetBufferConfig(deviceGroup string) (*BufferConfig, error) {
+	var c BufferConfig
+	err := db.conn.QueryRow(`
+		SELECT device_group, ram_events, disk_mb, retention_hours, strategy, updated_at
+		FROM buffer_configs
+		WHERE device_group = ?
+	`, deviceGroup).Scan(&c.DeviceGroup, &c.RAMEvents, &c.DiskMB, &c.RetentionHours, &c.Strategy, &c.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &c, nil
+}
+
+func (db *Database) ListBufferConfigs() ([]BufferConfig, error) {
+	rows, err := db.conn.Query(`
+		SELECT device_group, ram_events, disk_mb, retention_hours, strategy, updated_at
+		FROM buffer_configs
+		ORDER BY device_group
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var configs []BufferConfig
+	for rows.Next() {
+		var c BufferConfig
+		if err := rows.Scan(&c.DeviceGroup, &c.RAMEvents, &c.DiskMB, &c.RetentionHours, &c.Strategy, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		configs = append(configs, c)
+	}
+
+	return configs, rows.Err()
 }

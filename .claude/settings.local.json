@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(find /Users/barrysolomon/Projects/Dash0/mobile-otel-control-plane -name *test*.go -o -name *_test.ts -o -name *_test.tsx)",
+      "Bash(find /Users/barrysolomon/Projects/Dash0/mobile-otel-control-plane -maxdepth 2 -name README* -o -name readme*)",
+      "WebFetch(domain:bitdrift.io)",
+      "WebFetch(domain:docs.bitdrift.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.google.com)",
+      "Bash(go build:*)",
+      "Bash(python3 -m json.tool)",
+      "Bash(kill 50717)",
+      "Bash(rm -f /tmp/test-gateway-v2.db /tmp/gateway-v2.log)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
