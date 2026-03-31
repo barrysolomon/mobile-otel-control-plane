@@ -202,12 +202,40 @@ export function validateGraph(graph: WorkflowGraph): string[] {
   }
 
   // Check trigger nodes connect to logic or action
-  const triggerTypes = ['event_match', 'http_error_match', 'crash_marker'];
+  const triggerTypes = [
+    'event_match', 'log_severity_match', 'metric_threshold',
+    'http_error_match', 'crash_marker', 'exception_pattern',
+    'ui_freeze', 'slow_operation', 'frame_drop',
+    'network_loss', 'slow_request',
+    'low_memory', 'battery_drain', 'thermal_throttling', 'storage_low',
+    'predictive_risk', 'timeout_matcher',
+  ];
   for (const node of graph.nodes) {
     if (triggerTypes.includes(node.type)) {
       const outgoing = graph.edges.filter((e) => e.source === node.id);
       if (outgoing.length === 0) {
         errors.push(`Trigger node ${node.id} has no outgoing edges`);
+      }
+    }
+  }
+
+  // Validate state nodes
+  const stateNodes = graph.nodes.filter((n) => n.type === 'state');
+  if (stateNodes.length > 0) {
+    const initialStates = stateNodes.filter((n) => n.data.isInitial);
+    if (initialStates.length === 0) {
+      errors.push('State machine has no initial state');
+    }
+    if (initialStates.length > 1) {
+      errors.push('State machine has multiple initial states');
+    }
+    // Check all states are reachable
+    for (const state of stateNodes) {
+      if (!state.data.isInitial) {
+        const incoming = graph.edges.filter((e) => e.target === state.id);
+        if (incoming.length === 0) {
+          errors.push(`State "${state.data.stateName}" is unreachable`);
+        }
       }
     }
   }

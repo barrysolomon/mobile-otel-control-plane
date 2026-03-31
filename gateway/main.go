@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -23,6 +25,9 @@ import (
 )
 
 func main() {
+	migrateOnly := flag.Bool("migrate-only", false, "Run migrations and exit without starting the server")
+	flag.Parse()
+
 	// Configuration
 	port := getEnv("PORT", "8080")
 	dbPath := getEnv("DB_PATH", "./data/gateway.db")
@@ -49,6 +54,14 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer database.Close()
+
+	if *migrateOnly {
+		if err := database.MigrateOnly(); err != nil {
+			log.Fatalf("Migration failed: %v", err)
+		}
+		fmt.Println("Migration completed successfully")
+		os.Exit(0)
+	}
 
 	// Initialize OTEL exporter
 	ctx := context.Background()

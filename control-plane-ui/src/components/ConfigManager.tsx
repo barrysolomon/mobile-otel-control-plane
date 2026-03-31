@@ -304,7 +304,7 @@ export const ConfigManager: React.FC = () => {
                     type="radio"
                     value="grpc"
                     checked={otelConfig.protocol === 'grpc'}
-                    onChange={(e) => setOtelConfig({ ...otelConfig, protocol: 'grpc' })}
+                    onChange={() => setOtelConfig({ ...otelConfig, protocol: 'grpc' })}
                   />
                   <span>gRPC (port 4317)</span>
                 </label>
@@ -313,7 +313,7 @@ export const ConfigManager: React.FC = () => {
                     type="radio"
                     value="http"
                     checked={otelConfig.protocol === 'http'}
-                    onChange={(e) => setOtelConfig({ ...otelConfig, protocol: 'http' })}
+                    onChange={() => setOtelConfig({ ...otelConfig, protocol: 'http' })}
                   />
                   <span>HTTP (path /v1/signal)</span>
                 </label>

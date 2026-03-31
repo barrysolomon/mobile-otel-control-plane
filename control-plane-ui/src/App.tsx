@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { WorkflowBuilder } from './components/WorkflowBuilder';
 import { DeviceMonitor } from './components/DeviceMonitor';
 import { DeviceFleet } from './components/DeviceFleet';
@@ -6,6 +6,7 @@ import { ConfigManager } from './components/ConfigManager';
 import { CollectorConfig } from './components/CollectorConfig';
 import { gatewayAPI } from './api/gateway';
 import { compileGraphToDSL, validateGraph } from './utils/graphToDSL';
+import { compileGraphToDSLv2 } from './utils/graphToDSLv2';
 import type { WorkflowGraph, ConfigVersion } from './types/workflow';
 import './App.css';
 
@@ -53,6 +54,17 @@ export function App() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  useEffect(() => {
+    gatewayAPI.listWorkflows().then((wfs) => {
+      if (wfs.length > 0) {
+        setWorkflows(wfs);
+        setSelectedWorkflowId(wfs[0].id);
+      }
+    }).catch(() => {
+      // Keep default workflow if backend is unavailable
+    });
+  }, []);
+
   const selectedWorkflow = workflows.find((w) => w.id === selectedWorkflowId) || defaultWorkflow;
 
   const handleWorkflowChange = useCallback(
@@ -60,9 +72,48 @@ export function App() {
       setWorkflows((wfs) =>
         wfs.map((w) => (w.id === updatedWorkflow.id ? updatedWorkflow : w))
       );
+      // Auto-save to backend
+      gatewayAPI.updateWorkflow(updatedWorkflow).catch((err) => {
+        console.error('Failed to save workflow:', err);
+      });
     },
     []
   );
+
+  const handleCreateWorkflow = async () => {
+    const id = `workflow-${Date.now()}`;
+    const newWorkflow: WorkflowGraph = {
+      id,
+      name: 'New Workflow',
+      enabled: true,
+      entryNodeId: '',
+      nodes: [],
+      edges: [],
+    };
+    try {
+      await gatewayAPI.createWorkflow(newWorkflow);
+      setWorkflows((wfs) => [...wfs, newWorkflow]);
+      setSelectedWorkflowId(id);
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to create workflow: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    }
+  };
+
+  const handleDeleteWorkflow = async (id: string) => {
+    try {
+      await gatewayAPI.deleteWorkflow(id);
+      setWorkflows((wfs) => {
+        const remaining = wfs.filter((w) => w.id !== id);
+        if (selectedWorkflowId === id && remaining.length > 0) {
+          setSelectedWorkflowId(remaining[0].id);
+        }
+        return remaining;
+      });
+      setMessage({ type: 'success', text: 'Workflow deleted' });
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to delete: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    }
+  };
 
   const handleValidate = () => {
     const errors = validateGraph(selectedWorkflow);
@@ -85,15 +136,23 @@ export function App() {
         return;
       }
 
-      // Compile to DSL
+      // Compile to DSL v1 (backward compat)
       const dslConfig = compileGraphToDSL(workflows, {
         diskMb: 50,
         ramEvents: 5000,
         retentionHours: 24,
       });
 
-      // Publish to gateway
-      const response = await gatewayAPI.publish(workflows, dslConfig, 'admin');
+      // Compile to DSL v2 (state-machine format)
+      const dslConfigV2 = compileGraphToDSLv2(workflows, {
+        ram_events: 5000,
+        disk_mb: 50,
+        retention_hours: 24,
+        strategy: 'overwrite_oldest',
+      });
+
+      // Publish both v1 and v2 to gateway
+      const response = await gatewayAPI.publish(workflows, dslConfig, 'admin', dslConfigV2);
 
       setMessage({
         type: 'success',
@@ -165,7 +224,10 @@ export function App() {
       {activeTab === 'builder' && (
         <div className="builder-container">
           <aside className="workflow-list">
-            <h3>Workflows</h3>
+            <div className="workflow-list-header">
+              <h3>Workflows</h3>
+              <button onClick={handleCreateWorkflow} className="btn btn-sm" title="New Workflow">+</button>
+            </div>
             {workflows.map((workflow) => (
               <div
                 key={workflow.id}
@@ -173,8 +235,19 @@ export function App() {
                 onClick={() => setSelectedWorkflowId(workflow.id)}
               >
                 <div className="workflow-name">{workflow.name}</div>
-                <div className="workflow-status">
-                  {workflow.enabled ? '✓ Enabled' : '✗ Disabled'}
+                <div className="workflow-item-actions">
+                  <span className="workflow-status">
+                    {workflow.enabled ? '✓ Enabled' : '✗ Disabled'}
+                  </span>
+                  {workflows.length > 1 && (
+                    <button
+                      className="btn-delete"
+                      onClick={(e) => { e.stopPropagation(); handleDeleteWorkflow(workflow.id); }}
+                      title="Delete workflow"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

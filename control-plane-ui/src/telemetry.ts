@@ -6,7 +6,7 @@ import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-log
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-web'
-import { Resource } from '@opentelemetry/resources'
+import { resourceFromAttributes } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import { registerInstrumentations } from '@opentelemetry/instrumentation'
 import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch'
@@ -22,7 +22,7 @@ const headers = {
   'Dash0-Dataset': DATASET,
 }
 
-const resource = new Resource({
+const resource = resourceFromAttributes({
   [ATTR_SERVICE_NAME]: 'mobile-otel-control-plane',
   [ATTR_SERVICE_VERSION]: '1.0.0',
   'deployment.environment': 'development',
@@ -35,8 +35,10 @@ const traceExporter = new OTLPTraceExporter({
   headers,
 })
 
-const tracerProvider = new WebTracerProvider({ resource })
-tracerProvider.addSpanProcessor(new BatchSpanProcessor(traceExporter))
+const tracerProvider = new WebTracerProvider({
+  resource,
+  spanProcessors: [new BatchSpanProcessor(traceExporter)],
+})
 tracerProvider.register()
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
@@ -46,8 +48,10 @@ const logExporter = new OTLPLogExporter({
   headers,
 })
 
-const loggerProvider = new LoggerProvider({ resource })
-loggerProvider.addLogRecordProcessor(new SimpleLogRecordProcessor(logExporter))
+const loggerProvider = new LoggerProvider({
+  resource,
+  processors: [new SimpleLogRecordProcessor(logExporter)],
+})
 
 const logger = loggerProvider.getLogger('control-plane-ui')
 

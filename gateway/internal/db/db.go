@@ -337,7 +337,55 @@ func (db *Database) migrate() error {
 	db.conn.Exec("ALTER TABLE devices ADD COLUMN sdk_version TEXT DEFAULT ''")
 	db.conn.Exec("ALTER TABLE devices ADD COLUMN capabilities TEXT DEFAULT ''")
 
+	// Create migration tracking table
+	_, err2 := db.conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err2 != nil {
+		return fmt.Errorf("failed to create schema_migrations table: %w", err2)
+	}
+
+	// Record baseline version
+	_, err2 = db.conn.Exec(`INSERT OR IGNORE INTO schema_migrations (version) VALUES (1)`)
+	if err2 != nil {
+		return fmt.Errorf("failed to record migration version: %w", err2)
+	}
+
 	return nil
+}
+
+// MigrateOnly runs all pending migrations, prints schema info, and returns.
+// Used by --migrate-only flag for K8s Job-based migrations.
+func (db *Database) MigrateOnly() error {
+	if err := db.migrate(); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+
+	// Print schema version
+	var version int
+	err := db.conn.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version)
+	if err != nil {
+		return fmt.Errorf("failed to read schema version: %w", err)
+	}
+	fmt.Printf("Schema version: %d\n", version)
+
+	// Print table list
+	rows, err := db.conn.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	if err != nil {
+		return fmt.Errorf("failed to list tables: %w", err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Tables:")
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("failed to scan table name: %w", err)
+		}
+		fmt.Printf("  - %s\n", name)
+	}
+	return rows.Err()
 }
 
 func (db *Database) Close() error {
