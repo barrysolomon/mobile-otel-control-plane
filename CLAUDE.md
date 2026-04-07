@@ -26,7 +26,7 @@ go build -o gateway .
 ./gateway            # Runs on :8080
 ```
 
-Environment variables: `PORT` (default 8080), `DB_PATH` (default ./data/gateway.db), `OTEL_COLLECTOR_ENDPOINT`, `OTEL_AUTH_TOKEN`.
+Environment variables: `PORT` (default 8080), `DB_PATH` (default ./data/gateway.db), `OTEL_COLLECTOR_ENDPOINT`, `OTEL_AUTH_TOKEN`, `OTEL_TLS` (set `true` for TLS gRPC to collector), `CORS_ALLOWED_ORIGINS` (comma-separated, default `http://localhost:3000,http://localhost:5173`), `FLEET_HMAC_SECRET` (required in production when `ENV=production`), `ENV` (set `production` to enforce strict secret requirements), `ADMIN_TOKEN` (when set, `/admin/*` endpoints require `Authorization: Bearer <token>`).
 
 ### Infrastructure (k8s/)
 ```bash
@@ -143,7 +143,7 @@ See `docs/DSL_V2_SCHEMA.md` for the complete schema reference with all 21 matche
 
 The visual graph (React Flow nodes/edges) compiles to DSL through two paths:
 
-1. **v1 compiler** (`graphToDSL.ts`): Flat trigger/action format. Supports original 3 trigger types + 3 action types. Kept for backward compatibility with older SDK versions.
+1. **v1 compiler** (`graphToDSL.ts`): Flat trigger/action format. Supports original 3 trigger types + 3 action types. **Deprecated** — kept for backward compatibility with SDK versions that don't support v2. Target removal: when all known SDK deployments support v2 (no fixed date; track via device heartbeat `dsl_version` field).
 
 2. **v2 compiler** (`graphToDSLv2.ts`): State-machine format. Supports all 29 node types.
    - **Single-state FSM**: Workflows without StateNodes compile to a single "default" state (backward compatible pattern)

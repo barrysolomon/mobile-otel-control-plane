@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/mobile-observability/gateway/internal/handlers"
 	"github.com/mobile-observability/gateway/internal/otel"
 	"github.com/mobile-observability/gateway/internal/push"
+	"github.com/mobile-observability/gateway/internal/ratelimit"
 )
 
 func main() {
@@ -98,6 +100,10 @@ func main() {
 
 	hmacSecret := []byte(os.Getenv("FLEET_HMAC_SECRET"))
 	if len(hmacSecret) == 0 {
+		if os.Getenv("ENV") == "production" {
+			log.Fatalf("FLEET_HMAC_SECRET must be set in production")
+		}
+		log.Println("WARNING: FLEET_HMAC_SECRET not set, using dev default — do NOT use in production")
 		hmacSecret = []byte("dev-secret-change-in-production")
 	}
 
@@ -142,10 +148,10 @@ func main() {
 	mux.HandleFunc("POST /v1/otel-configs/activate", h.HandleActivateOTELConfig)
 	mux.HandleFunc("GET /v1/otel-configs/rollout-status", h.HandleGetConfigRolloutStatus)
 
-	// Admin endpoints
-	mux.HandleFunc("POST /admin/publish", h.HandlePublish)
-	mux.HandleFunc("POST /admin/rollback", h.HandleRollback)
-	mux.HandleFunc("GET /admin/versions", h.HandleVersions)
+	// Admin endpoints (require ADMIN_TOKEN when set)
+	mux.HandleFunc("POST /admin/publish", adminAuthMiddleware(h.HandlePublish))
+	mux.HandleFunc("POST /admin/rollback", adminAuthMiddleware(h.HandleRollback))
+	mux.HandleFunc("GET /admin/versions", adminAuthMiddleware(h.HandleVersions))
 
 	// Workflow CRUD endpoints
 	mux.HandleFunc("POST /v1/workflows", h.HandleCreateWorkflow)
@@ -181,9 +187,9 @@ func main() {
 
 	// Cascade Management
 	mux.HandleFunc("GET /v1/cascades", h.HandleListCascades)
-	mux.HandleFunc("POST /admin/cascade/kill", h.HandleKillSwitch)
-	mux.HandleFunc("POST /admin/cascade/resume", h.HandleResumeSwitch)
-	mux.HandleFunc("GET /admin/cascade/breaker-state", h.HandleGetBreakerState)
+	mux.HandleFunc("POST /admin/cascade/kill", adminAuthMiddleware(h.HandleKillSwitch))
+	mux.HandleFunc("POST /admin/cascade/resume", adminAuthMiddleware(h.HandleResumeSwitch))
+	mux.HandleFunc("GET /admin/cascade/breaker-state", adminAuthMiddleware(h.HandleGetBreakerState))
 
 	// Push Channel
 	mux.HandleFunc("GET /v1/push/status", h.HandleGetPushStatus)
@@ -196,13 +202,17 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// Rate limiter: 100 requests per minute per IP
+	limiter := ratelimit.New(100, time.Minute)
+
 	// Create server
 	server := &http.Server{
-		Addr:         ":" + port,
-		Handler:      loggingMiddleware(corsMiddleware(mux)),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:           ":" + port,
+		Handler:        limiter.Middleware(loggingMiddleware(corsMiddleware(mux))),
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB max header size
 	}
 
 	// Graceful shutdown
@@ -236,6 +246,22 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+// adminAuthMiddleware requires a valid ADMIN_TOKEN for admin endpoints.
+// If ADMIN_TOKEN env var is empty, admin endpoints are open (dev mode).
+func adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	adminToken := os.Getenv("ADMIN_TOKEN")
+	return func(w http.ResponseWriter, r *http.Request) {
+		if adminToken != "" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+adminToken {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -246,10 +272,23 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = "http://localhost:3000,http://localhost:5173"
+	}
+	originSet := make(map[string]bool)
+	for _, o := range strings.Split(allowedOrigins, ",") {
+		originSet[strings.TrimSpace(o)] = true
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if originSet[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

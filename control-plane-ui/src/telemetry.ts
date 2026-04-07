@@ -13,9 +13,9 @@ import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch'
 import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request'
 import { SeverityNumber } from '@opentelemetry/api-logs'
 
-const ENDPOINT = 'https://ingress.us-west-2.aws.dash0.com'
-const AUTH_TOKEN = 'auth_fI0GuunaYYbw8u0n0iyFAC4Wt2FMf0jh'
-const DATASET = 'otel-mobile'
+const ENDPOINT = import.meta.env.VITE_DASH0_ENDPOINT || 'https://ingress.us-west-2.aws.dash0.com'
+const AUTH_TOKEN = import.meta.env.VITE_DASH0_AUTH_TOKEN || ''
+const DATASET = import.meta.env.VITE_DASH0_DATASET || 'otel-mobile'
 
 const headers = {
   Authorization: `Bearer ${AUTH_TOKEN}`,
@@ -121,10 +121,10 @@ window.addEventListener('unhandledrejection', (event) => {
 registerInstrumentations({
   instrumentations: [
     new FetchInstrumentation({
-      propagateTraceHeaderCorsUrls: [/localhost:8080/, /dash0\.com/],
+      propagateTraceHeaderCorsUrls: [/localhost/, /dash0\.com/],
     }),
     new XMLHttpRequestInstrumentation({
-      propagateTraceHeaderCorsUrls: [/localhost:8080/, /dash0\.com/],
+      propagateTraceHeaderCorsUrls: [/localhost/, /dash0\.com/],
     }),
   ],
 })

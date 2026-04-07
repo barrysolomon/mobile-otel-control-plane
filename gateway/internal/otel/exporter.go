@@ -6,6 +6,8 @@ package otel
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
@@ -14,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -35,12 +38,16 @@ type MobileEvent struct {
 }
 
 func NewLogExporter(ctx context.Context, collectorEndpoint string, authToken string) (*LogExporter, error) {
-	// Create gRPC connection to collector with timeout
-	// Note: WithBlock is removed to allow non-blocking connection
-	// Connection will be established lazily on first use
-	conn, err := grpc.NewClient(collectorEndpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	// Create gRPC connection to collector
+	// Default: insecure (matches K8s/Docker Compose where collector has no TLS on :4317)
+	// Set OTEL_TLS=true for production endpoints that require TLS (e.g., Dash0 ingress)
+	var transportCreds grpc.DialOption
+	if strings.EqualFold(os.Getenv("OTEL_TLS"), "true") {
+		transportCreds = grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, ""))
+	} else {
+		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
+	}
+	conn, err := grpc.NewClient(collectorEndpoint, transportCreds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC connection: %w", err)
 	}

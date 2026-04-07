@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -50,6 +51,60 @@ type FleetComponents struct {
 	Pipeline     *fleet.FleetEventPipeline
 	Dedup        *fleet.EventDeduplicator
 	HmacSecret   []byte
+}
+
+// maxIDLength is the maximum allowed length for ID-type query parameters.
+const maxIDLength = 256
+
+// maxQueryLimit caps the limit query parameter to prevent expensive queries.
+const maxQueryLimit = 200
+
+// validateID checks that an ID parameter is non-empty and within length bounds.
+func validateID(w http.ResponseWriter, name, value string) bool {
+	if value == "" {
+		http.Error(w, name+" is required", http.StatusBadRequest)
+		return false
+	}
+	if len(value) > maxIDLength {
+		http.Error(w, name+" exceeds maximum length", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// clampLimit parses a limit string and caps it at maxQueryLimit.
+func clampLimit(limitStr string, defaultVal int) int {
+	if limitStr == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(limitStr)
+	if err != nil || n <= 0 {
+		return defaultVal
+	}
+	if n > maxQueryLimit {
+		return maxQueryLimit
+	}
+	return n
+}
+
+// maxRequestBody is the maximum allowed request body size (10 MB).
+const maxRequestBody = 10 * 1024 * 1024
+
+// readLimitedBody reads the request body with a size limit to prevent memory exhaustion.
+// Returns 413 for oversized bodies, 400 for other read errors.
+func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		}
+		return nil, err
+	}
+	return body, nil
 }
 
 // IngestRequest is the JSON body accepted by the POST /ingest endpoint.
@@ -167,9 +222,8 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -210,8 +264,7 @@ func (h *Handler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 	appID := r.URL.Query().Get("app_id")
 	deviceID := r.URL.Query().Get("device_id")
 
-	if appID == "" || deviceID == "" {
-		http.Error(w, "app_id and device_id required", http.StatusBadRequest)
+	if !validateID(w, "app_id", appID) || !validateID(w, "device_id", deviceID) {
 		return
 	}
 
@@ -250,9 +303,8 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -345,9 +397,8 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -389,9 +440,8 @@ func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -428,13 +478,7 @@ func (h *Handler) HandleVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
+	limit := clampLimit(r.URL.Query().Get("limit"), 50)
 
 	versions, err := h.configMgr.ListVersions(limit)
 	if err != nil {
@@ -458,9 +502,8 @@ func (h *Handler) HandleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -524,15 +567,8 @@ func (h *Handler) HandleListDevices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	group := r.URL.Query().Get("group")
-	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
-
-	limit := 50
-	if limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
+	limit := clampLimit(r.URL.Query().Get("limit"), 50)
 
 	offset := 0
 	if offsetStr != "" {
@@ -605,9 +641,8 @@ func (h *Handler) HandleUpdateDeviceGroup(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -662,13 +697,7 @@ func (h *Handler) HandleListHeartbeats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limitStr := r.URL.Query().Get("limit")
-	limit := 100
-	if limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
+	limit := clampLimit(r.URL.Query().Get("limit"), 100)
 
 	heartbeats, err := h.db.GetRecentHeartbeats(limit)
 	if err != nil {
@@ -693,9 +722,8 @@ func (h *Handler) HandleCreateOTELConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -798,14 +826,7 @@ func (h *Handler) HandleListOTELConfigs(w http.ResponseWriter, r *http.Request) 
 	}
 
 	deviceGroup := r.URL.Query().Get("device_group")
-	limitStr := r.URL.Query().Get("limit")
-
-	limit := 50
-	if limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
+	limit := clampLimit(r.URL.Query().Get("limit"), 50)
 
 	configs, err := h.db.ListOTELConfigs(deviceGroup, limit)
 	if err != nil {
@@ -886,9 +907,8 @@ func (h *Handler) HandleActivateOTELConfig(w http.ResponseWriter, r *http.Reques
 
 // HandleCreateWorkflow creates a new workflow
 func (h *Handler) HandleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -988,9 +1008,8 @@ func (h *Handler) HandleUpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -1142,8 +1161,12 @@ func (h *Handler) HandleMetricsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body, err := readLimitedBody(w, r)
+	if err != nil {
+		return
+	}
 	var req MetricIngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1202,8 +1225,12 @@ func (h *Handler) HandleFunnelsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body, err := readLimitedBody(w, r)
+	if err != nil {
+		return
+	}
 	var req FunnelIngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1249,9 +1276,8 @@ func (h *Handler) HandleFunnelsIngest(w http.ResponseWriter, r *http.Request) {
 
 // HandleCreateTargetingRule creates a new targeting rule for a workflow
 func (h *Handler) HandleCreateTargetingRule(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -1343,9 +1369,8 @@ func (h *Handler) HandleDeleteTargetingRule(w http.ResponseWriter, r *http.Reque
 
 // HandleUpsertBufferConfig creates or updates a buffer configuration for a device group
 func (h *Handler) HandleUpsertBufferConfig(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(w, r)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -1450,8 +1475,12 @@ func (h *Handler) HandleListCohorts(w http.ResponseWriter, r *http.Request) {
 
 // HandleCreateCohort creates a new dynamic cohort.
 func (h *Handler) HandleCreateCohort(w http.ResponseWriter, r *http.Request) {
+	body, err := readLimitedBody(w, r)
+	if err != nil {
+		return
+	}
 	var c cohort.Cohort
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+	if err := json.Unmarshal(body, &c); err != nil {
 		http.Error(w, "invalid json", 400)
 		return
 	}
@@ -1512,8 +1541,12 @@ func (h *Handler) HandleResumeSwitch(w http.ResponseWriter, r *http.Request) {
 
 // HandleFleetEvents receives fleet events from the Collector.
 func (h *Handler) HandleFleetEvents(w http.ResponseWriter, r *http.Request) {
+	body, err := readLimitedBody(w, r)
+	if err != nil {
+		return
+	}
 	var events []fleet.FleetEvent
-	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
+	if err := json.Unmarshal(body, &events); err != nil {
 		http.Error(w, "invalid json", 400)
 		return
 	}
