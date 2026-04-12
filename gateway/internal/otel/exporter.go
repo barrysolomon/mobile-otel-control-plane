@@ -5,13 +5,14 @@ package otel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log"
 	"os"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
-	"go.opentelemetry.io/otel/log"
+	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
@@ -22,7 +23,7 @@ import (
 
 type LogExporter struct {
 	provider  *sdklog.LoggerProvider
-	logger    log.Logger
+	logger    otellog.Logger
 	authToken string
 }
 
@@ -38,14 +39,16 @@ type MobileEvent struct {
 }
 
 func NewLogExporter(ctx context.Context, collectorEndpoint string, authToken string) (*LogExporter, error) {
-	// Create gRPC connection to collector
-	// Default: insecure (matches K8s/Docker Compose where collector has no TLS on :4317)
-	// Set OTEL_TLS=true for production endpoints that require TLS (e.g., Dash0 ingress)
+	// Create gRPC connection to collector.
+	// Default: insecure (matches K8s/Docker Compose where collector has no TLS on :4317).
+	// Set COLLECTOR_TLS_ENABLED=true for production endpoints that require TLS (e.g., Dash0 ingress).
 	var transportCreds grpc.DialOption
-	if strings.EqualFold(os.Getenv("OTEL_TLS"), "true") {
-		transportCreds = grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, ""))
+	if os.Getenv("COLLECTOR_TLS_ENABLED") == "true" {
+		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{}))
+		log.Println("gRPC: TLS enabled for collector connection")
 	} else {
 		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
+		log.Println("gRPC: insecure (no TLS) — set COLLECTOR_TLS_ENABLED=true for production")
 	}
 	conn, err := grpc.NewClient(collectorEndpoint, transportCreds)
 	if err != nil {
@@ -112,20 +115,20 @@ func (e *LogExporter) exportEvent(ctx context.Context, event MobileEvent) error 
 	timestamp := time.UnixMilli(event.Timestamp)
 
 	// Build log record
-	var record log.Record
+	var record otellog.Record
 	record.SetTimestamp(timestamp)
-	record.SetBody(log.StringValue(event.EventName))
+	record.SetBody(otellog.StringValue(event.EventName))
 
 	// Add standard attributes
 	record.AddAttributes(
-		log.String("session_id", event.SessionID),
-		log.String("device_id", event.DeviceID),
-		log.Int("config_version", event.ConfigVersion),
+		otellog.String("session_id", event.SessionID),
+		otellog.String("device_id", event.DeviceID),
+		otellog.Int("config_version", event.ConfigVersion),
 	)
 
 	// Add trigger_id if present
 	if event.TriggerID != "" {
-		record.AddAttributes(log.String("trigger_id", event.TriggerID))
+		record.AddAttributes(otellog.String("trigger_id", event.TriggerID))
 	}
 
 	// Add custom attributes from event
@@ -139,21 +142,21 @@ func (e *LogExporter) exportEvent(ctx context.Context, event MobileEvent) error 
 	return nil
 }
 
-func convertAttribute(key string, value interface{}) log.KeyValue {
+func convertAttribute(key string, value interface{}) otellog.KeyValue {
 	switch v := value.(type) {
 	case string:
-		return log.String(key, v)
+		return otellog.String(key, v)
 	case int:
-		return log.Int(key, v)
+		return otellog.Int(key, v)
 	case int64:
-		return log.Int64(key, v)
+		return otellog.Int64(key, v)
 	case float64:
-		return log.Float64(key, v)
+		return otellog.Float64(key, v)
 	case bool:
-		return log.Bool(key, v)
+		return otellog.Bool(key, v)
 	default:
 		// Fallback to string representation
-		return log.String(key, fmt.Sprintf("%v", v))
+		return otellog.String(key, fmt.Sprintf("%v", v))
 	}
 }
 

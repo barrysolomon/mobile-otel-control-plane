@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mobile-observability/gateway/internal/auth"
 	"github.com/mobile-observability/gateway/internal/cohort"
 	"github.com/mobile-observability/gateway/internal/config"
 	"github.com/mobile-observability/gateway/internal/db"
@@ -148,10 +149,11 @@ func main() {
 	mux.HandleFunc("POST /v1/otel-configs/activate", h.HandleActivateOTELConfig)
 	mux.HandleFunc("GET /v1/otel-configs/rollout-status", h.HandleGetConfigRolloutStatus)
 
-	// Admin endpoints (require ADMIN_TOKEN when set)
-	mux.HandleFunc("POST /admin/publish", adminAuthMiddleware(h.HandlePublish))
-	mux.HandleFunc("POST /admin/rollback", adminAuthMiddleware(h.HandleRollback))
-	mux.HandleFunc("GET /admin/versions", adminAuthMiddleware(h.HandleVersions))
+	// Admin endpoints (require GATEWAY_ADMIN_API_KEY when set)
+	adminMW := auth.AdminAPIKeyMiddleware
+	mux.Handle("POST /admin/publish", adminMW(http.HandlerFunc(h.HandlePublish)))
+	mux.Handle("POST /admin/rollback", adminMW(http.HandlerFunc(h.HandleRollback)))
+	mux.Handle("GET /admin/versions", adminMW(http.HandlerFunc(h.HandleVersions)))
 
 	// Workflow CRUD endpoints
 	mux.HandleFunc("POST /v1/workflows", h.HandleCreateWorkflow)
@@ -187,9 +189,9 @@ func main() {
 
 	// Cascade Management
 	mux.HandleFunc("GET /v1/cascades", h.HandleListCascades)
-	mux.HandleFunc("POST /admin/cascade/kill", adminAuthMiddleware(h.HandleKillSwitch))
-	mux.HandleFunc("POST /admin/cascade/resume", adminAuthMiddleware(h.HandleResumeSwitch))
-	mux.HandleFunc("GET /admin/cascade/breaker-state", adminAuthMiddleware(h.HandleGetBreakerState))
+	mux.Handle("POST /admin/cascade/kill", adminMW(http.HandlerFunc(h.HandleKillSwitch)))
+	mux.Handle("POST /admin/cascade/resume", adminMW(http.HandlerFunc(h.HandleResumeSwitch)))
+	mux.Handle("GET /admin/cascade/breaker-state", adminMW(http.HandlerFunc(h.HandleGetBreakerState)))
 
 	// Push Channel
 	mux.HandleFunc("GET /v1/push/status", h.HandleGetPushStatus)
@@ -246,28 +248,15 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-// adminAuthMiddleware requires a valid ADMIN_TOKEN for admin endpoints.
-// If ADMIN_TOKEN env var is empty, admin endpoints are open (dev mode).
-func adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	adminToken := os.Getenv("ADMIN_TOKEN")
-	return func(w http.ResponseWriter, r *http.Request) {
-		if adminToken != "" {
-			auth := r.Header.Get("Authorization")
-			if auth != "Bearer "+adminToken {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		next(w, r)
-	}
-}
-
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		log.Printf("%s %s %s", r.Method, r.URL.Path, r.RemoteAddr)
+		// Use r.URL.Path only (not RequestURI/String) to omit query params and prevent PII leakage.
+		// r.RemoteAddr is redacted to avoid logging user IP addresses.
+		logPath := r.URL.Path
+		log.Printf("%s %s", r.Method, logPath)
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s - %v", r.Method, r.URL.Path, time.Since(start))
+		log.Printf("%s %s - %v", r.Method, logPath, time.Since(start))
 	})
 }
 
