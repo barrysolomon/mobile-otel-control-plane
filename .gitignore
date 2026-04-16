@@ -1,0 +1,17 @@
+# Compiled Go binary (runtime artifact)
+gateway/gateway
+
+# SQLite databases + WAL/SHM files (runtime state)
+gateway/data/*.db
+gateway/data/*.db-shm
+gateway/data/*.db-wal
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+
+# Env files
+.env
+.env.local
+*.env.local
