@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 /**
  * Phase 4 (User Journey + Screen/Wireframe Captures Epic) — minimal viewer.
@@ -160,23 +160,41 @@ function formatTime(ms: number): string {
   return d.toISOString().slice(11, 23);
 }
 
-function ScreenshotRow({ event }: { event: NormalizedEvent }) {
+function ScreenshotRow({
+  event,
+  onOpen,
+}: {
+  event: NormalizedEvent;
+  onOpen: (dataUrl: string, label: string) => void;
+}) {
   const dataUrl = attr<string>(event, 'mobile.screenshot.data_url');
   const trigger = attr<string>(event, 'mobile.screenshot.trigger') ?? 'manual';
   const screen = attr<string>(event, 'screen.name') ?? '';
   const sizeBytes = attr<number>(event, 'mobile.screenshot.size_bytes');
+  const width = attr<number>(event, 'mobile.screenshot.width');
+  const height = attr<number>(event, 'mobile.screenshot.height');
+  const label = `${formatTime(event.timestampMs)} · ${trigger}${screen ? ` · ${screen}` : ''}`;
   return (
     <div style={{ border: '1px solid #ccc', borderRadius: 4, padding: 8, marginBottom: 8 }}>
       <div style={{ fontSize: 12, color: '#666' }}>
         <strong>{formatTime(event.timestampMs)}</strong> · ui.screenshot · trigger=<code>{trigger}</code>
         {screen && <> · screen=<code>{screen}</code></>}
         {typeof sizeBytes === 'number' && <> · {Math.round(sizeBytes / 1024)} KB</>}
+        {typeof width === 'number' && typeof height === 'number' && <> · {width}×{height}</>}
       </div>
       {dataUrl && (
         <img
           src={dataUrl}
           alt={`screenshot ${trigger}`}
-          style={{ maxWidth: 320, maxHeight: 480, marginTop: 4, border: '1px solid #eee' }}
+          onClick={() => onOpen(dataUrl, label)}
+          title="Click to view full-size"
+          style={{
+            maxWidth: 320,
+            maxHeight: 480,
+            marginTop: 4,
+            border: '1px solid #eee',
+            cursor: 'zoom-in',
+          }}
         />
       )}
     </div>
@@ -250,14 +268,121 @@ function GenericRow({ event }: { event: NormalizedEvent }) {
   );
 }
 
-function JourneyTimeline({ events }: { events: NormalizedEvent[] }) {
+function ScreenshotStrip({
+  events,
+  onOpen,
+}: {
+  events: NormalizedEvent[];
+  onOpen: (dataUrl: string, label: string) => void;
+}) {
+  const shots = events.filter((e) => e.body === 'ui.screenshot' && attr<string>(e, 'mobile.screenshot.data_url'));
+  if (shots.length === 0) return null;
+  return (
+    <div style={{
+      display: 'flex',
+      gap: 8,
+      overflowX: 'auto',
+      padding: 8,
+      background: '#f4f4f4',
+      borderRadius: 4,
+      marginBottom: 12,
+    }}>
+      {shots.map((e, i) => {
+        const dataUrl = attr<string>(e, 'mobile.screenshot.data_url')!;
+        const trigger = attr<string>(e, 'mobile.screenshot.trigger') ?? 'manual';
+        const label = `${formatTime(e.timestampMs)} · ${trigger}`;
+        return (
+          <div key={i} style={{ flex: '0 0 auto', textAlign: 'center' }}>
+            <img
+              src={dataUrl}
+              alt={label}
+              onClick={() => onOpen(dataUrl, label)}
+              title={label}
+              style={{
+                width: 96,
+                height: 192,
+                objectFit: 'contain',
+                background: '#fff',
+                border: '1px solid #ddd',
+                cursor: 'zoom-in',
+              }}
+            />
+            <div style={{ fontSize: 10, color: '#666', marginTop: 2 }}>{trigger}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function JourneyTimeline({
+  events,
+  onOpenScreenshot,
+}: {
+  events: NormalizedEvent[];
+  onOpenScreenshot: (dataUrl: string, label: string) => void;
+}) {
   return (
     <div>
+      <ScreenshotStrip events={events} onOpen={onOpenScreenshot} />
       {events.map((e, i) => {
-        if (e.body === 'ui.screenshot') return <ScreenshotRow key={i} event={e} />;
+        if (e.body === 'ui.screenshot') return <ScreenshotRow key={i} event={e} onOpen={onOpenScreenshot} />;
         if (e.body === 'ui.wireframe') return <WireframeRow key={i} event={e} />;
         return <GenericRow key={i} event={e} />;
       })}
+    </div>
+  );
+}
+
+function ScreenshotLightbox({
+  src,
+  label,
+  onClose,
+}: {
+  src: string;
+  label: string;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      role="dialog"
+      aria-label="Full-size screenshot"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.85)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        cursor: 'zoom-out',
+        padding: 24,
+      }}
+    >
+      <img
+        src={src}
+        alt={label}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: '90vw',
+          maxHeight: '85vh',
+          background: '#fff',
+          border: '2px solid #fff',
+          cursor: 'default',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+        }}
+      />
+      <div style={{
+        color: '#fff',
+        fontFamily: 'monospace',
+        fontSize: 12,
+        marginTop: 12,
+      }}>
+        {label}
+        {' '}<span style={{ color: '#aaa' }}>(click outside or press Esc to close)</span>
+      </div>
     </div>
   );
 }
@@ -289,6 +414,19 @@ export function JourneyReplay() {
   const [traceIdInput, setTraceIdInput] = useState('');
   const [fromWindow, setFromWindow] = useState('now-1h');
   const [fetching, setFetching] = useState(false);
+  const [lightbox, setLightbox] = useState<{ src: string; label: string } | null>(null);
+
+  // Esc closes the lightbox.
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightbox(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
+
+  const openScreenshot = (src: string, label: string) => setLightbox({ src, label });
 
   const handleFetch = async () => {
     const tid = traceIdInput.trim();
@@ -412,9 +550,17 @@ export function JourneyReplay() {
           <summary style={{ cursor: 'pointer', fontWeight: 600, marginBottom: 8 }}>
             Trace <code>{traceId}</code> · {traceEvents.length} events
           </summary>
-          <JourneyTimeline events={traceEvents} />
+          <JourneyTimeline events={traceEvents} onOpenScreenshot={openScreenshot} />
         </details>
       ))}
+
+      {lightbox && (
+        <ScreenshotLightbox
+          src={lightbox.src}
+          label={lightbox.label}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }
