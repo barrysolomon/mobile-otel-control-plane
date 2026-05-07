@@ -273,9 +273,40 @@ You can pipe \`dash0 logs export --filter "trace_id=...XXX..." --format json\`
 into a file and paste it here. Captures (mobile.screenshot.*, mobile.wireframe.*)
 render inline; everything else shows as a timeline entry.`;
 
+async function fetchByTraceId(traceId: string, fromWindow: string): Promise<string> {
+  const params = new URLSearchParams({ trace_id: traceId, from: fromWindow, limit: '100' });
+  const resp = await fetch(`/api/v1/replay/by-trace?${params.toString()}`);
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`Gateway returned ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  return text;
+}
+
 export function JourneyReplay() {
   const [raw, setRaw] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [traceIdInput, setTraceIdInput] = useState('');
+  const [fromWindow, setFromWindow] = useState('now-1h');
+  const [fetching, setFetching] = useState(false);
+
+  const handleFetch = async () => {
+    const tid = traceIdInput.trim();
+    if (!tid) {
+      setError('enter a trace_id (32-char hex)');
+      return;
+    }
+    setError(null);
+    setFetching(true);
+    try {
+      const text = await fetchByTraceId(tid, fromWindow);
+      setRaw(text);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setFetching(false);
+    }
+  };
 
   const events = useMemo(() => {
     setError(null);
@@ -305,10 +336,49 @@ export function JourneyReplay() {
     <div style={{ padding: 16 }}>
       <h2 style={{ marginBottom: 8 }}>Journey Replay</h2>
       <p style={{ fontSize: 13, color: '#666', marginTop: 0 }}>
-        Local viewer for the User Journey + Screen/Wireframe Captures epic.
-        Paste a JSON export of telemetry log records to see the journey
-        timeline grouped by <code>trace_id</code>.
+        Viewer for the User Journey + Screen/Wireframe Captures epic. Either
+        fetch a journey live from Dash0 by <code>trace_id</code>, or paste a
+        JSON export below for offline review.
       </p>
+
+      <div style={{
+        border: '1px solid #ddd', borderRadius: 4, padding: 12, marginBottom: 12,
+        background: '#fafafa',
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Fetch from Dash0</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={traceIdInput}
+            onChange={(e) => setTraceIdInput(e.target.value)}
+            placeholder="trace_id (32-char hex, e.g. a4f225e54cf8a4f6fdf84be3d9dfa1fb)"
+            style={{ flex: '1 1 480px', padding: 6, fontFamily: 'monospace', fontSize: 12 }}
+          />
+          <select
+            value={fromWindow}
+            onChange={(e) => setFromWindow(e.target.value)}
+            style={{ padding: 6, fontSize: 12 }}
+          >
+            <option value="now-15m">Last 15m</option>
+            <option value="now-1h">Last 1h</option>
+            <option value="now-6h">Last 6h</option>
+            <option value="now-24h">Last 24h</option>
+            <option value="now-7d">Last 7d</option>
+          </select>
+          <button
+            onClick={handleFetch}
+            disabled={fetching || !traceIdInput.trim()}
+            style={{ padding: '6px 14px', fontSize: 12 }}
+          >
+            {fetching ? 'Fetching…' : 'Fetch'}
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: '#888', marginTop: 6 }}>
+          Gateway must be running with <code>DASH0_API_URL</code>,
+          {' '}<code>DASH0_AUTH_TOKEN</code>, <code>DASH0_DATASET</code> env set.
+          Token never reaches the browser.
+        </div>
+      </div>
 
       <textarea
         value={raw}

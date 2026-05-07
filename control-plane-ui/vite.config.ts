@@ -7,7 +7,7 @@ export default defineConfig({
     port: parseInt(process.env.PORT || '3000', 10),
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.GATEWAY_URL || 'http://localhost:8080',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }

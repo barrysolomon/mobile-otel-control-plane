@@ -199,6 +199,10 @@ func main() {
 	// Workflow Audit
 	mux.HandleFunc("GET /v1/workflows/audit", h.HandleGetWorkflowAudit)
 
+	// Journey Replay — proxies trace_id queries to Dash0 so the UI can
+	// pull live data without exposing the bearer token to the browser.
+	mux.HandleFunc("GET /v1/replay/by-trace", h.HandleReplayByTrace)
+
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
