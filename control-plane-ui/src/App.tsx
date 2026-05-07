@@ -4,6 +4,7 @@ import { DeviceMonitor } from './components/DeviceMonitor';
 import { DeviceFleet } from './components/DeviceFleet';
 import { ConfigManager } from './components/ConfigManager';
 import { CollectorConfig } from './components/CollectorConfig';
+import { JourneyReplay } from './components/JourneyReplay';
 import { gatewayAPI } from './api/gateway';
 import { compileGraphToDSL, validateGraph } from './utils/graphToDSL';
 import { compileGraphToDSLv2 } from './utils/graphToDSLv2';
@@ -47,7 +48,7 @@ const defaultWorkflow: WorkflowGraph = {
 export function App() {
   const [workflows, setWorkflows] = useState<WorkflowGraph[]>([defaultWorkflow]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(defaultWorkflow.id);
-  const [activeTab, setActiveTab] = useState<'builder' | 'devices' | 'config'>('builder');
+  const [activeTab, setActiveTab] = useState<'builder' | 'devices' | 'config' | 'replay'>('builder');
   const [devicesSubTab, setDevicesSubTab] = useState<'fleet' | 'monitor'>('fleet');
   const [configSubTab, setConfigSubTab] = useState<'workflows' | 'collector'>('workflows');
   const [versions, setVersions] = useState<ConfigVersion[]>([]);
@@ -211,6 +212,12 @@ export function App() {
           >
             Configuration
           </button>
+          <button
+            className={`tab-btn ${activeTab === 'replay' ? 'active' : ''}`}
+            onClick={() => setActiveTab('replay')}
+          >
+            Journey Replay
+          </button>
         </div>
       </header>
 
@@ -345,6 +352,8 @@ export function App() {
           {configSubTab === 'collector' && <CollectorConfig />}
         </div>
       )}
+
+      {activeTab === 'replay' && <JourneyReplay />}
     </div>
   );
 }
