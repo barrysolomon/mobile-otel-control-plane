@@ -28,6 +28,7 @@ export type GraphNode =
   // Network Triggers
   | HttpErrorMatchNode
   | NetworkLossNode
+  | NetworkRestoredNode
   | SlowRequestNode
   // Device Health Triggers
   | LowMemoryNode
@@ -147,6 +148,17 @@ export interface NetworkLossNode {
   position: { x: number; y: number };
   data: {
     consecutiveFailures?: number;
+  };
+}
+
+export interface NetworkRestoredNode {
+  id: string;
+  type: 'network_restored';
+  position: { x: number; y: number };
+  data: {
+    /** Optional debounce window (ms) the SDK applies before firing on a
+     * LOST → AVAILABLE transition. Defaults to 500ms in the SDK. */
+    debounceMs?: number;
   };
 }
 
@@ -477,6 +489,7 @@ export type DSLMatcherType =
   | 'slow_operation'
   | 'frame_drop'
   | 'network_loss'
+  | 'network_restored'
   | 'low_memory'
   | 'battery_drain'
   | 'thermal_throttle'

@@ -125,6 +125,16 @@ const nodeTemplates = [
     },
   },
   {
+    type: 'network_restored',
+    category: 'Network',
+    label: 'Network Restored',
+    icon: '📶',
+    description: 'Fire when offline → online edge is observed (LOST → AVAILABLE). Wakes the buffer on reconnect.',
+    defaultData: {
+      debounceMs: 500,
+    },
+  },
+  {
     type: 'slow_request',
     category: 'Network',
     label: 'Slow Request',
@@ -575,6 +585,7 @@ export function WorkflowBuilder({ workflow, onChange }: WorkflowBuilderProps) {
       // Network Triggers
       http_error_match: TriggerNode,
       network_loss: TriggerNode,
+      network_restored: TriggerNode,
       slow_request: TriggerNode,
 
       // Device Health Triggers

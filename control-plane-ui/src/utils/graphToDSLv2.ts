@@ -323,6 +323,16 @@ function nodeToMatcher(
         },
       };
 
+    case 'network_restored':
+      return {
+        type: 'network_restored',
+        config: {
+          ...(node.data.debounceMs != null && {
+            debounce_ms: node.data.debounceMs,
+          }),
+        },
+      };
+
     case 'slow_request':
       return {
         type: 'slow_request' as DSLMatcherType,

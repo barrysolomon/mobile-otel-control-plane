@@ -206,7 +206,7 @@ export function validateGraph(graph: WorkflowGraph): string[] {
     'event_match', 'log_severity_match', 'metric_threshold',
     'http_error_match', 'crash_marker', 'exception_pattern',
     'ui_freeze', 'slow_operation', 'frame_drop',
-    'network_loss', 'slow_request',
+    'network_loss', 'network_restored', 'slow_request',
     'low_memory', 'battery_drain', 'thermal_throttling', 'storage_low',
     'predictive_risk', 'timeout_matcher',
   ];
