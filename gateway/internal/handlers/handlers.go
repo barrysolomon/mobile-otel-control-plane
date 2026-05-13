@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,10 +22,18 @@ import (
 	"github.com/mobile-observability/gateway/internal/push"
 )
 
+// EventExporter abstracts the OTLP log exporter so HTTP-level tests can
+// inject a fake. The concrete production implementation is *otel.LogExporter
+// which dials a gRPC connection to the OTEL Collector at startup; tests
+// stub this out to avoid network dependencies.
+type EventExporter interface {
+	ExportEvents(ctx context.Context, events []otel.MobileEvent) error
+}
+
 // Handler holds the shared dependencies for all HTTP route handlers.
 type Handler struct {
 	db        *db.Database
-	exporter  *otel.LogExporter
+	exporter  EventExporter
 	configMgr *config.Manager
 	// Fleet intelligence components
 	fleetDB      *db.FleetDB
@@ -196,7 +205,9 @@ type CreateOTELConfigRequest struct {
 }
 
 // NewHandler creates a Handler wiring the database, OTEL exporter, and config manager.
-func NewHandler(database *db.Database, exporter *otel.LogExporter, configMgr *config.Manager) *Handler {
+// `exporter` is typed as the `EventExporter` interface so tests can supply a
+// fake without dialing a real OTEL Collector.
+func NewHandler(database *db.Database, exporter EventExporter, configMgr *config.Manager) *Handler {
 	return &Handler{
 		db:        database,
 		exporter:  exporter,
@@ -205,7 +216,7 @@ func NewHandler(database *db.Database, exporter *otel.LogExporter, configMgr *co
 }
 
 // NewHandlerWithFleet creates a Handler with fleet intelligence components wired in.
-func NewHandlerWithFleet(database *db.Database, exporter *otel.LogExporter, configMgr *config.Manager, fc FleetComponents) *Handler {
+func NewHandlerWithFleet(database *db.Database, exporter EventExporter, configMgr *config.Manager, fc FleetComponents) *Handler {
 	return &Handler{
 		db: database, exporter: exporter, configMgr: configMgr,
 		fleetDB: fc.FleetDB, auditDB: fc.AuditDB, cohortMgr: fc.CohortMgr,
