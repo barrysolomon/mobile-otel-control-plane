@@ -266,6 +266,13 @@ func (h *Handler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetConfig returns the active DSL configuration for a device.
 // Supports version negotiation via ?dsl_version=1 (default) or ?dsl_version=2.
+//
+// `app_id` and `device_id` query params are accepted (validated against
+// length when present) but NOT required. The SDK's PolicyEvaluator polls
+// `${endpoint}/config?dsl_version=2` without them, and the gateway has no
+// per-app/device-targeted lookup today — there is just one active config.
+// Making the IDs optional unblocks the real SDK without giving up the
+// validation we DO need on /v1/devices etc.
 func (h *Handler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -275,7 +282,12 @@ func (h *Handler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 	appID := r.URL.Query().Get("app_id")
 	deviceID := r.URL.Query().Get("device_id")
 
-	if !validateID(w, "app_id", appID) || !validateID(w, "device_id", deviceID) {
+	// Length-validate when provided; reject explicitly bad IDs but allow
+	// empty (since SDK ConfigPoller doesn't send them).
+	if appID != "" && !validateID(w, "app_id", appID) {
+		return
+	}
+	if deviceID != "" && !validateID(w, "device_id", deviceID) {
 		return
 	}
 

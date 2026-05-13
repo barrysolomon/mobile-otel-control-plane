@@ -133,19 +133,41 @@ func TestGetConfig_V1FallbackShape(t *testing.T) {
 	}
 }
 
-// SDK contract: rejected app_id / device_id must return 400 with a readable
-// error. The SDK retries on 5xx but treats 4xx as "stop polling" — so giving
-// 5xx for bad query params would create polling loops.
-func TestGetConfig_RejectsMissingAppID(t *testing.T) {
+// SDK contract: app_id / device_id are OPTIONAL on /config. The real SDK
+// PolicyEvaluator (mobile-otel/.../PolicyEvaluator.kt:413) polls without
+// them — `${endpoint}/config?dsl_version=2`. The gateway must accept that
+// call and return the active config. Test pinned 2026-05-13 after a
+// real-device acceptance run caught the SDK getting 400s every 5 seconds.
+//
+// Length validation is still applied WHEN the IDs are present, so a
+// future caller passing oversized IDs still gets a 400 (covered by
+// TestGetConfig_RejectsOversizedAppID).
+func TestGetConfig_OptionalAppIDAndDeviceID(t *testing.T) {
 	h, _ := newTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/config?device_id=dev1&dsl_version=2", nil)
+	// No app_id, no device_id — the SDK's actual call shape.
+	req := httptest.NewRequest(http.MethodGet, "/config?dsl_version=2", nil)
 	rec := httptest.NewRecorder()
+	h.HandleGetConfig(rec, req)
 
+	if rec.Code != http.StatusOK {
+		t.Fatalf("config without ids: want 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// Length validation still applies when the IDs ARE provided — keeps the
+// validation seam intact for future per-app/device targeting.
+func TestGetConfig_RejectsOversizedAppID(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	oversize := strings.Repeat("a", 1024)
+	req := httptest.NewRequest(http.MethodGet,
+		"/config?app_id="+oversize+"&device_id=dev1&dsl_version=2", nil)
+	rec := httptest.NewRecorder()
 	h.HandleGetConfig(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("missing app_id: want 400 got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("oversized app_id: want 400 got %d", rec.Code)
 	}
 }
 
