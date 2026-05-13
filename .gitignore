@@ -1,10 +1,21 @@
-# Compiled Go binary (runtime artifact)
+# Compiled Go binaries (runtime artifacts)
 gateway/gateway
+gateway/gateway-acceptance
+gateway/gateway-smoke
 
 # SQLite databases + WAL/SHM files (runtime state)
 gateway/data/*.db
 gateway/data/*.db-shm
 gateway/data/*.db-wal
+
+# Acceptance test runtime artifacts
+acceptance/node_modules/
+acceptance/.tmp/
+acceptance/test-results/
+acceptance/playwright-report/
+
+# UI build output
+control-plane-ui/dist/
 
 # OS / editor cruft
 .DS_Store

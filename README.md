@@ -8,6 +8,7 @@ Management plane for the [OpenTelemetry Android Mobile SDK](https://github.com/b
 |-----------|------|-------------|
 | **Control Plane UI** | `control-plane-ui/` | React 18 + TypeScript visual policy builder using React Flow |
 | **Gateway** | `gateway/` | Go HTTP server — config versioning, event ingestion, OTLP export |
+| **Acceptance Suite** | `acceptance/` | Playwright + simulated SDK. `npm run test:acceptance` boots gateway + UI and validates the 5 user-facing scenarios end-to-end. Spec in [UI_ACCEPTANCE_TESTING_EPIC.md](docs/epics/UI_ACCEPTANCE_TESTING_EPIC.md). |
 | **Deployment** | `k8s/` | Kubernetes manifests + Docker Compose for local dev |
 
 ## Architecture

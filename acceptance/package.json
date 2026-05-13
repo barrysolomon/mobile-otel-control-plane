@@ -1,0 +1,19 @@
+{
+  "name": "control-plane-acceptance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Acceptance test suite for the mobile control-plane UI and gateway. Boots both servers, drives the UI via Playwright, and pokes the gateway via a simulated SDK device.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "boot": "node scripts/boot.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

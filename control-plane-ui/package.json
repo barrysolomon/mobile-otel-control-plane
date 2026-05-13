@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:acceptance": "node ../acceptance/scripts/boot.mjs",
+    "test:acceptance:headed": "node ../acceptance/scripts/boot.mjs --headed",
+    "test:acceptance:smoke": "node ../acceptance/scripts/smoke.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
