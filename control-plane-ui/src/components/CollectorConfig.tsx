@@ -17,7 +17,7 @@ const DEFAULT_ENDPOINTS: CollectorEndpoint[] = [
     name: 'Dash0 US',
     endpoint: 'ingress.us.dash0.com:4317',
     protocol: 'grpc',
-    enabled: false,
+    enabled: true,
   },
   {
     name: 'Dash0 EU',
@@ -29,7 +29,7 @@ const DEFAULT_ENDPOINTS: CollectorEndpoint[] = [
     name: 'Local OTEL Collector',
     endpoint: 'localhost:4317',
     protocol: 'grpc',
-    enabled: true,
+    enabled: false,
   },
   {
     name: 'Custom Endpoint',
@@ -130,7 +130,7 @@ export function CollectorConfig({ onSave }: CollectorConfigProps) {
       serviceName: 'mobile-app',
       serviceVersion: '1.0.0',
       collectorEndpoint: `https://${activeEndpoint.endpoint}`,
-      exportMode: 'CONDITIONAL',
+      exportMode: 'HYBRID',
       headers: activeEndpoint.headers || null,
     };
 

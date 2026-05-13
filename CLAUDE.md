@@ -8,6 +8,8 @@ Mobile observability control plane for managing OpenTelemetry configuration on A
 
 Three main components: a React UI for visual workflow editing, a Go gateway API backed by SQLite, and Kubernetes/Docker deployment configs for an OTEL Collector pipeline.
 
+**Terminology note:** The workspace-level guidance prefers "export policies" / "selective flush" over "workflows" / "replay". This control-plane UI still uses "workflow" as the user-facing label and in code (`WorkflowBuilder`, `/v1/workflows/*`, `graphToDSL`) — treat that as intentional legacy naming for this repo only. New SDK-side code in `mobile-otel/` should use the newer terms.
+
 ## Build & Run Commands
 
 ### Frontend (control-plane-ui/)
@@ -26,7 +28,19 @@ go build -o gateway .
 ./gateway            # Runs on :8080
 ```
 
-Environment variables: `PORT` (default 8080), `DB_PATH` (default ./data/gateway.db), `OTEL_COLLECTOR_ENDPOINT`, `OTEL_AUTH_TOKEN`, `OTEL_TLS` (set `true` for TLS gRPC to collector), `CORS_ALLOWED_ORIGINS` (comma-separated, default `http://localhost:3000,http://localhost:5173`), `FLEET_HMAC_SECRET` (required in production when `ENV=production`), `ENV` (set `production` to enforce strict secret requirements), `ADMIN_TOKEN` (when set, `/admin/*` endpoints require `Authorization: Bearer <token>`).
+Environment variables:
+
+|Var|Default|Notes|
+|---|---|---|
+|`PORT`|`8080`|Gateway HTTP port|
+|`DB_PATH`|`./data/gateway.db`|SQLite file location|
+|`OTEL_COLLECTOR_ENDPOINT`|—|gRPC endpoint for log forwarding|
+|`OTEL_AUTH_TOKEN`|—|Bearer token for collector|
+|`OTEL_TLS`|`false`|Set `true` for TLS gRPC to collector|
+|`CORS_ALLOWED_ORIGINS`|`http://localhost:3000,http://localhost:5173`|Comma-separated|
+|`ENV`|—|Set `production` to enforce strict secret requirements|
+|`FLEET_HMAC_SECRET`|—|Required when `ENV=production`|
+|`ADMIN_TOKEN`|—|When set, `/admin/*` endpoints require `Authorization: Bearer <token>`|
 
 ### Infrastructure (k8s/)
 ```bash

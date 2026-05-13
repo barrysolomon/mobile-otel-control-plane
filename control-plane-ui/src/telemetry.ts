@@ -118,14 +118,16 @@ window.addEventListener('unhandledrejection', (event) => {
 
 // ── HTTP instrumentation (fetch + XHR) ────────────────────────────────────────
 
+const corsPatterns = [/localhost/, /127\.0\.0\.1/]
+try {
+  const host = new URL(ENDPOINT).hostname.replace(/\./g, '\\.')
+  corsPatterns.push(new RegExp(host))
+} catch { /* ENDPOINT may be empty in dev */ }
+
 registerInstrumentations({
   instrumentations: [
-    new FetchInstrumentation({
-      propagateTraceHeaderCorsUrls: [/localhost/, /dash0\.com/],
-    }),
-    new XMLHttpRequestInstrumentation({
-      propagateTraceHeaderCorsUrls: [/localhost/, /dash0\.com/],
-    }),
+    new FetchInstrumentation({ propagateTraceHeaderCorsUrls: corsPatterns }),
+    new XMLHttpRequestInstrumentation({ propagateTraceHeaderCorsUrls: corsPatterns }),
   ],
 })
 
