@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "test:acceptance": "node ../acceptance/scripts/boot.mjs",
     "test:acceptance:headed": "node ../acceptance/scripts/boot.mjs --headed",
-    "test:acceptance:smoke": "node ../acceptance/scripts/smoke.mjs"
+    "test:acceptance:smoke": "node ../acceptance/scripts/smoke.mjs",
+    "test:acceptance:real-device": "node ../acceptance/scripts/real-device-android.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",

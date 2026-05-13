@@ -1,6 +1,7 @@
 # Compiled Go binaries (runtime artifacts)
 gateway/gateway
 gateway/gateway-acceptance
+gateway/gateway-acceptance-realdevice
 gateway/gateway-smoke
 
 # SQLite databases + WAL/SHM files (runtime state)

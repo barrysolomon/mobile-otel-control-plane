@@ -178,3 +178,34 @@ The go-sqlite3 driver returns `COALESCE(date_col, date_col)` results as strings 
 **Fix:** scan the COALESCE'd columns into intermediary strings and parse in Go via a new `parseSqliteTime` helper. Avoids a connection-string flag that would change semantics for every other query in the package.
 
 This bug was invisible in the existing unit tests because they used fresh DBs with no populated heartbeat rows. The acceptance suite exercises the real round-trip (heartbeats → registration → list) and caught it on first run. This is exactly what the epic was designed to do — and proves the investment immediately.
+
+## Real-device acceptance — Android
+
+The simulated-SDK suite confirms gateway + UI work; a separate harness drives the same publish flow against a **live Android emulator running the actual mobile-otel SDK**.
+
+```
+npm run test:acceptance:real-device
+```
+
+This script:
+
+1. Requires a booted Android emulator (won't boot one for you — that's a 4-minute hit you decide when to take).
+2. Builds the control-plane gateway.
+3. Writes a temporary `otel-config.json` to the mobile-otel demo app's debug assets, pointing the SDK at `http://10.0.2.2:8080` (host gateway, from the emulator's POV) with a 5-second poll interval.
+4. Builds + installs the demo APK fresh on the emulator.
+5. Launches the demo, tails logcat for `PolicyEvaluator`.
+6. After the SDK's first poll lands, publishes a test workflow via `POST /admin/publish`.
+7. Asserts the SDK observably re-fetched after the publish (`Fetched policy config: N policies` log line appearing AFTER the publish timestamp).
+8. Restores the demo app's original config files on success or failure.
+
+**Run time:** ~2 minutes on cold cache (Gradle build); ~30 seconds on incremental.
+
+### Real bugs caught by the real-device harness
+
+The first end-to-end run surfaced two real defects:
+
+1. **Gradle template task overwrote our config.** The demo app's `build.gradle.kts` runs `generateOtelConfig` before `mergeDebugAssets`, which copies `otel-config.json.template` to `otel-config.json` every build. Writing only to the generated file alone never survived an `assembleDebug`. Fix: harness now writes BOTH the template AND the generated file, backs up the template, restores both on exit.
+
+2. **Gateway rejected SDK polls with 400.** The gateway's `HandleGetConfig` required `app_id` and `device_id` query params via `validateID`. The actual mobile-otel SDK at `PolicyEvaluator.kt:413` polls `${endpoint}/config?dsl_version=2` with NEITHER param. Every real device was getting 400s every 5 seconds — invisible until a real emulator was wired up. Fix: made the IDs optional (still length-validated when present); contract tests updated to match.
+
+This pair of fixes unblocks any real-world mobile-otel deployment that points its `collectorEndpoint` at this control plane. Without the acceptance harness driving an actual SDK against the gateway, both would have shipped.
