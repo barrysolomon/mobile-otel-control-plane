@@ -38,9 +38,10 @@ Environment variables:
 |`OTEL_AUTH_TOKEN`|—|Bearer token for collector|
 |`OTEL_TLS`|`false`|Set `true` for TLS gRPC to collector|
 |`CORS_ALLOWED_ORIGINS`|`http://localhost:3000,http://localhost:5173`|Comma-separated|
-|`ENV`|—|Set `production` to enforce strict secret requirements|
-|`FLEET_HMAC_SECRET`|—|Required when `ENV=production`|
-|`ADMIN_TOKEN`|—|When set, `/admin/*` endpoints require `Authorization: Bearer <token>`|
+|`ENVIRONMENT` or `ENV`|—|Set either to `production` to enforce strict secret requirements (both accepted)|
+|`FLEET_HMAC_SECRET`|—|Required when in production mode; fails fast otherwise|
+|`GATEWAY_ADMIN_API_KEY`|—|When set, `/admin/*` endpoints require `X-API-Key: <key>` header or `?api_key=<key>` query. Required in production mode.|
+|`COLLECTOR_TLS_ENABLED`|`false`|Set `true` to use TLS for the gateway→collector gRPC connection|
 
 ### Infrastructure (k8s/)
 ```bash

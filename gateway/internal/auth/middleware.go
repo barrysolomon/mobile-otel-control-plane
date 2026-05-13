@@ -11,11 +11,17 @@ import (
 
 // AdminAPIKeyMiddleware returns middleware that requires a valid API key
 // for admin endpoints. The key is read from GATEWAY_ADMIN_API_KEY env var.
-// If the env var is not set, all admin requests are rejected in production
-// mode (ENVIRONMENT=production) or allowed with a warning in dev mode.
+// Auth is sent via the `X-API-Key: <key>` header (or `?api_key=<key>` query).
+//
+// Production gating: when GATEWAY_ADMIN_API_KEY is empty, the gateway
+// either fails fast (in production) or runs unauthenticated (in dev) with
+// a loud warning. "Production" is detected via either ENVIRONMENT=production
+// or ENV=production — both are accepted so deployments using either
+// convention fail safely. Aligned with main.go's FLEET_HMAC_SECRET gate
+// 2026-05-13.
 func AdminAPIKeyMiddleware(next http.Handler) http.Handler {
 	apiKey := os.Getenv("GATEWAY_ADMIN_API_KEY")
-	isProd := os.Getenv("ENVIRONMENT") == "production"
+	isProd := os.Getenv("ENVIRONMENT") == "production" || os.Getenv("ENV") == "production"
 
 	if apiKey == "" {
 		if isProd {

@@ -101,7 +101,11 @@ func main() {
 
 	hmacSecret := []byte(os.Getenv("FLEET_HMAC_SECRET"))
 	if len(hmacSecret) == 0 {
-		if os.Getenv("ENV") == "production" {
+		// Production gate accepts both ENVIRONMENT and ENV for the value
+		// "production" — keep both so deployments using either convention
+		// fail safely. auth/middleware.go uses ENVIRONMENT; previous
+		// versions of this file used ENV. Aligned 2026-05-13.
+		if os.Getenv("ENVIRONMENT") == "production" || os.Getenv("ENV") == "production" {
 			log.Fatalf("FLEET_HMAC_SECRET must be set in production")
 		}
 		log.Println("WARNING: FLEET_HMAC_SECRET not set, using dev default — do NOT use in production")
