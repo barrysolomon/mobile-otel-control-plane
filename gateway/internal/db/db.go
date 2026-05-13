@@ -677,14 +677,47 @@ func (db *Database) ListDevices(group string, limit, offset int) ([]Device, int,
 	var devices []Device
 	for rows.Next() {
 		var d Device
+		// COALESCE in the SQL returns strings for the timestamp columns (the
+		// go-sqlite3 driver doesn't auto-parse non-canonical timestamp
+		// expressions back to time.Time). Scan into strings and parse here;
+		// avoids a connection-string flag that breaks other queries.
+		var registeredAtStr, lastSeenStr, lastConfigFetchStr string
 		if err := rows.Scan(&d.DeviceID, &d.DeviceToken, &d.DeviceGroup, &d.OSVersion, &d.AppVersion,
-			&d.RegisteredAt, &d.LastSeen, &d.LastConfigFetch, &d.CurrentConfigVersion, &d.ConfigAppliedSuccessfully); err != nil {
+			&registeredAtStr, &lastSeenStr, &lastConfigFetchStr,
+			&d.CurrentConfigVersion, &d.ConfigAppliedSuccessfully); err != nil {
 			return nil, 0, err
 		}
+		d.RegisteredAt = parseSqliteTime(registeredAtStr)
+		d.LastSeen = parseSqliteTime(lastSeenStr)
+		d.LastConfigFetch = parseSqliteTime(lastConfigFetchStr)
 		devices = append(devices, d)
 	}
 
 	return devices, total, rows.Err()
+}
+
+// parseSqliteTime parses the SQLite TIMESTAMP / DATETIME wire format. SQLite
+// stores them as text in one of a few formats; we try the most common ones.
+// Returns the zero time.Time if no format matches (better than panicking
+// when an ancient row's format isn't recognised).
+func parseSqliteTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05.999999999Z",
+		"2006-01-02T15:04:05Z",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func (db *Database) UpdateDeviceGroup(deviceID, group string) error {
