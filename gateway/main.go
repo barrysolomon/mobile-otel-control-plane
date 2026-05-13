@@ -130,15 +130,59 @@ func main() {
 		HmacSecret:   hmacSecret,
 	})
 
-	// Setup HTTP routes
+	// Setup HTTP routes.
+	//
+	// v1 MVP scoping (2026-05-13): the gateway is split into a *core* surface
+	// (SDK contract + device fleet + workflow publish) and an *experimental*
+	// surface (everything else). Experimental routes return 503 Service
+	// Unavailable unless ENABLE_EXPERIMENTAL=true. The corresponding UI tabs
+	// are hidden behind the same env var in control-plane-ui.
+	//
+	// Why a server-side gate instead of just leaving them on:
+	// - Many experimental handlers are stubs or have no UI consumption today
+	//   (rollout-status returns placeholder JSON; fleet/cohorts/cascades have
+	//   wired handlers but no tests).
+	// - A customer hitting an unfinished endpoint by accident gets a clear
+	//   "experimental, not enabled" signal instead of a stub response that
+	//   looks real.
+	// - Reversible: flip the env var to opt in for development / beta usage.
 	mux := http.NewServeMux()
+	experimentalEnabled := os.Getenv("ENABLE_EXPERIMENTAL") == "true"
+	if experimentalEnabled {
+		log.Println("ENABLE_EXPERIMENTAL=true — experimental routes active")
+	}
 
-	// Device endpoints
+	// experimentalHandlerFunc wraps a handler so it returns 503 when
+	// experimental routes are disabled. The route is still registered (so
+	// 404 doesn't lie about whether the path exists) but the body explains
+	// the gate.
+	experimentalHandlerFunc := func(name string, h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !experimentalEnabled {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error":   "experimental feature disabled",
+					"feature": name,
+					"hint":    "Set ENABLE_EXPERIMENTAL=true on the gateway to enable.",
+				})
+				return
+			}
+			h(w, r)
+		}
+	}
+	experimentalHandler := func(name string, h http.Handler) http.Handler {
+		return experimentalHandlerFunc(name, h.ServeHTTP)
+	}
+
+	// ── CORE — v1 production surface ────────────────────────────────────
+
+	// SDK contract endpoints (Android/iOS/RN poll these)
 	mux.HandleFunc("POST /ingest", h.HandleIngest)
 	mux.HandleFunc("GET /config", h.HandleGetConfig)
 	mux.HandleFunc("POST /status", h.HandleStatus)
 
-	// Device management endpoints
+	// Device fleet management
 	mux.HandleFunc("POST /v1/devices/register", h.HandleRegisterDevice)
 	mux.HandleFunc("GET /v1/devices", h.HandleListDevices)
 	mux.HandleFunc("GET /v1/devices/detail", h.HandleGetDevice)
@@ -146,71 +190,75 @@ func main() {
 	mux.HandleFunc("GET /v1/device-groups", h.HandleListDeviceGroups)
 	mux.HandleFunc("GET /v1/heartbeats", h.HandleListHeartbeats)
 
-	// OTEL Configuration management endpoints
-	mux.HandleFunc("POST /v1/otel-configs", h.HandleCreateOTELConfig)
-	mux.HandleFunc("GET /v1/otel-configs", h.HandleListOTELConfigs)
-	mux.HandleFunc("GET /v1/otel-configs/active", h.HandleGetActiveOTELConfig)
-	mux.HandleFunc("POST /v1/otel-configs/activate", h.HandleActivateOTELConfig)
-	mux.HandleFunc("GET /v1/otel-configs/rollout-status", h.HandleGetConfigRolloutStatus)
-
-	// Admin endpoints (require GATEWAY_ADMIN_API_KEY when set)
-	adminMW := auth.AdminAPIKeyMiddleware
-	mux.Handle("POST /admin/publish", adminMW(http.HandlerFunc(h.HandlePublish)))
-	mux.Handle("POST /admin/rollback", adminMW(http.HandlerFunc(h.HandleRollback)))
-	mux.Handle("GET /admin/versions", adminMW(http.HandlerFunc(h.HandleVersions)))
-
-	// Workflow CRUD endpoints
+	// Workflow CRUD (the editor's storage layer)
 	mux.HandleFunc("POST /v1/workflows", h.HandleCreateWorkflow)
 	mux.HandleFunc("GET /v1/workflows", h.HandleListWorkflows)
 	mux.HandleFunc("GET /v1/workflows/detail", h.HandleGetWorkflow)
 	mux.HandleFunc("PUT /v1/workflows/detail", h.HandleUpdateWorkflow)
 	mux.HandleFunc("DELETE /v1/workflows/detail", h.HandleDeleteWorkflow)
 
-	// Targeting rules endpoints
-	mux.HandleFunc("POST /v1/targeting-rules", h.HandleCreateTargetingRule)
-	mux.HandleFunc("GET /v1/targeting-rules", h.HandleListTargetingRules)
-	mux.HandleFunc("DELETE /v1/targeting-rules", h.HandleDeleteTargetingRule)
+	// Admin/publish (require GATEWAY_ADMIN_API_KEY when set; auth middleware
+	// is a no-op in dev mode for `npm run dev` ergonomics)
+	adminMW := auth.AdminAPIKeyMiddleware
+	mux.Handle("POST /admin/publish", adminMW(http.HandlerFunc(h.HandlePublish)))
+	mux.Handle("POST /admin/rollback", adminMW(http.HandlerFunc(h.HandleRollback)))
+	mux.Handle("GET /admin/versions", adminMW(http.HandlerFunc(h.HandleVersions)))
 
-	// Buffer config endpoints
-	mux.HandleFunc("POST /v1/buffer-configs", h.HandleUpsertBufferConfig)
-	mux.HandleFunc("GET /v1/buffer-configs", h.HandleGetBufferConfig)
-	mux.HandleFunc("GET /v1/buffer-configs/list", h.HandleListBufferConfigs)
+	// Health
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
 
-	// Metrics & Funnel ingest endpoints
-	mux.HandleFunc("POST /v1/metrics/ingest", h.HandleMetricsIngest)
-	mux.HandleFunc("POST /v1/funnels/ingest", h.HandleFunnelsIngest)
+	// ── EXPERIMENTAL — gated behind ENABLE_EXPERIMENTAL=true ────────────
 
-	// Fleet Intelligence Routes
-	mux.HandleFunc("POST /v1/fleet/events", h.HandleFleetEvents)
-	mux.HandleFunc("GET /v1/fleet/rules", h.HandleListFleetRules)
-	mux.HandleFunc("GET /v1/fleet/counters", h.HandleGetFleetCounters)
+	// OTEL Collector config per device group (rollout-status handler stubbed)
+	mux.HandleFunc("POST /v1/otel-configs", experimentalHandlerFunc("otel-configs", h.HandleCreateOTELConfig))
+	mux.HandleFunc("GET /v1/otel-configs", experimentalHandlerFunc("otel-configs", h.HandleListOTELConfigs))
+	mux.HandleFunc("GET /v1/otel-configs/active", experimentalHandlerFunc("otel-configs", h.HandleGetActiveOTELConfig))
+	mux.HandleFunc("POST /v1/otel-configs/activate", experimentalHandlerFunc("otel-configs", h.HandleActivateOTELConfig))
+	mux.HandleFunc("GET /v1/otel-configs/rollout-status", experimentalHandlerFunc("otel-configs", h.HandleGetConfigRolloutStatus))
 
-	// Cohort Management
-	mux.HandleFunc("GET /v1/cohorts", h.HandleListCohorts)
-	mux.HandleFunc("POST /v1/cohorts", h.HandleCreateCohort)
-	mux.HandleFunc("DELETE /v1/cohorts", h.HandleDeleteCohort)
-	mux.HandleFunc("GET /v1/cohorts/members", h.HandleGetCohortMembers)
+	// Targeting rules (UI form exists but not wired)
+	mux.HandleFunc("POST /v1/targeting-rules", experimentalHandlerFunc("targeting-rules", h.HandleCreateTargetingRule))
+	mux.HandleFunc("GET /v1/targeting-rules", experimentalHandlerFunc("targeting-rules", h.HandleListTargetingRules))
+	mux.HandleFunc("DELETE /v1/targeting-rules", experimentalHandlerFunc("targeting-rules", h.HandleDeleteTargetingRule))
 
-	// Cascade Management
-	mux.HandleFunc("GET /v1/cascades", h.HandleListCascades)
-	mux.Handle("POST /admin/cascade/kill", adminMW(http.HandlerFunc(h.HandleKillSwitch)))
-	mux.Handle("POST /admin/cascade/resume", adminMW(http.HandlerFunc(h.HandleResumeSwitch)))
-	mux.Handle("GET /admin/cascade/breaker-state", adminMW(http.HandlerFunc(h.HandleGetBreakerState)))
+	// Buffer config per device group
+	mux.HandleFunc("POST /v1/buffer-configs", experimentalHandlerFunc("buffer-configs", h.HandleUpsertBufferConfig))
+	mux.HandleFunc("GET /v1/buffer-configs", experimentalHandlerFunc("buffer-configs", h.HandleGetBufferConfig))
+	mux.HandleFunc("GET /v1/buffer-configs/list", experimentalHandlerFunc("buffer-configs", h.HandleListBufferConfigs))
 
-	// Push Channel
-	mux.HandleFunc("GET /v1/push/status", h.HandleGetPushStatus)
+	// Pre-aggregated metrics + funnels (no UI query layer yet)
+	mux.HandleFunc("POST /v1/metrics/ingest", experimentalHandlerFunc("metrics-ingest", h.HandleMetricsIngest))
+	mux.HandleFunc("POST /v1/funnels/ingest", experimentalHandlerFunc("funnels-ingest", h.HandleFunnelsIngest))
 
-	// Workflow Audit
-	mux.HandleFunc("GET /v1/workflows/audit", h.HandleGetWorkflowAudit)
+	// Fleet intelligence (no tests; no UI integration)
+	mux.HandleFunc("POST /v1/fleet/events", experimentalHandlerFunc("fleet-intelligence", h.HandleFleetEvents))
+	mux.HandleFunc("GET /v1/fleet/rules", experimentalHandlerFunc("fleet-intelligence", h.HandleListFleetRules))
+	mux.HandleFunc("GET /v1/fleet/counters", experimentalHandlerFunc("fleet-intelligence", h.HandleGetFleetCounters))
+
+	// Cohort management
+	mux.HandleFunc("GET /v1/cohorts", experimentalHandlerFunc("cohorts", h.HandleListCohorts))
+	mux.HandleFunc("POST /v1/cohorts", experimentalHandlerFunc("cohorts", h.HandleCreateCohort))
+	mux.HandleFunc("DELETE /v1/cohorts", experimentalHandlerFunc("cohorts", h.HandleDeleteCohort))
+	mux.HandleFunc("GET /v1/cohorts/members", experimentalHandlerFunc("cohorts", h.HandleGetCohortMembers))
+
+	// Cascade management
+	mux.HandleFunc("GET /v1/cascades", experimentalHandlerFunc("cascades", h.HandleListCascades))
+	mux.Handle("POST /admin/cascade/kill", experimentalHandler("cascades", adminMW(http.HandlerFunc(h.HandleKillSwitch))))
+	mux.Handle("POST /admin/cascade/resume", experimentalHandler("cascades", adminMW(http.HandlerFunc(h.HandleResumeSwitch))))
+	mux.Handle("GET /admin/cascade/breaker-state", experimentalHandler("cascades", adminMW(http.HandlerFunc(h.HandleGetBreakerState))))
+
+	// Push channel
+	mux.HandleFunc("GET /v1/push/status", experimentalHandlerFunc("push-channel", h.HandleGetPushStatus))
+
+	// Workflow audit log (no UI consumption)
+	mux.HandleFunc("GET /v1/workflows/audit", experimentalHandlerFunc("workflow-audit", h.HandleGetWorkflowAudit))
 
 	// Journey Replay — proxies trace_id queries to Dash0 so the UI can
 	// pull live data without exposing the bearer token to the browser.
-	mux.HandleFunc("GET /v1/replay/by-trace", h.HandleReplayByTrace)
-
-	// Health check
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
+	// Beta: works but landed in last 2 weeks; needs real-world soak.
+	mux.HandleFunc("GET /v1/replay/by-trace", experimentalHandlerFunc("journey-replay", h.HandleReplayByTrace))
 
 	// Rate limiter: 100 requests per minute per IP
 	limiter := ratelimit.New(100, time.Minute)

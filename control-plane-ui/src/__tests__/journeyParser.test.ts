@@ -3,7 +3,6 @@ import {
   parseEvents,
   normalizeLogRecord,
   normalizeFlat,
-  normalizeAny,
   groupByTrace,
   attr,
 } from '../utils/journeyParser';
@@ -14,7 +13,6 @@ import {
   mkFlatRecord,
   mkScreenshotRecord,
   mkWireframeRecord,
-  SAMPLE_WIREFRAME_JSON,
   SAMPLE_TRACE_ID,
 } from './fixtures/journeyFixtures';
 

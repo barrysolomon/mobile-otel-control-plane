@@ -42,6 +42,9 @@ Environment variables:
 |`FLEET_HMAC_SECRET`|—|Required when in production mode; fails fast otherwise|
 |`GATEWAY_ADMIN_API_KEY`|—|When set, `/admin/*` endpoints require `X-API-Key: <key>` header or `?api_key=<key>` query. Required in production mode.|
 |`COLLECTOR_TLS_ENABLED`|`false`|Set `true` to use TLS for the gateway→collector gRPC connection|
+|`ENABLE_EXPERIMENTAL`|`false`|When `true`, opens experimental routes (otel-configs, targeting-rules, buffer-configs, metrics/funnels ingest, fleet/*, cohorts, cascades, push, workflow-audit, journey-replay). Off by default in v1. See README "Experimental endpoints" for the full list.|
+
+The matching UI gate is `VITE_ENABLE_EXPERIMENTAL=true` on the Vite build — both must be true for a complete experimental experience (tab visible AND endpoints reachable).
 
 ### Infrastructure (k8s/)
 ```bash

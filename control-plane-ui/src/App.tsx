@@ -51,6 +51,20 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'builder' | 'devices' | 'config' | 'replay'>('builder');
   const [devicesSubTab, setDevicesSubTab] = useState<'fleet' | 'monitor'>('fleet');
   const [configSubTab, setConfigSubTab] = useState<'workflows' | 'collector'>('workflows');
+
+  // v1 MVP scoping: hide experimental tabs unless VITE_ENABLE_EXPERIMENTAL=true.
+  // The corresponding server-side gate is ENABLE_EXPERIMENTAL on the gateway —
+  // both must be true for a complete experimental experience (tab visible AND
+  // endpoints reachable). See README + CLAUDE.md for the v1 surface area list.
+  const experimentalEnabled = import.meta.env.VITE_ENABLE_EXPERIMENTAL === 'true';
+
+  // If the user was on an experimental tab and the flag flipped off (e.g., a
+  // build of the UI without VITE_ENABLE_EXPERIMENTAL), bounce back to builder.
+  // No useEffect needed — derive at render time. activeTab is a controlled
+  // value; we just guard the body rendering.
+  const safeActiveTab = !experimentalEnabled && (activeTab === 'config' || activeTab === 'replay')
+    ? 'builder'
+    : activeTab;
   const [versions, setVersions] = useState<ConfigVersion[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -195,29 +209,35 @@ export function App() {
         <h1>Mobile Observability Control Plane</h1>
         <div className="header-actions">
           <button
-            className={`tab-btn ${activeTab === 'builder' ? 'active' : ''}`}
+            className={`tab-btn ${safeActiveTab === 'builder' ? 'active' : ''}`}
             onClick={() => setActiveTab('builder')}
           >
             Workflow Builder
           </button>
           <button
-            className={`tab-btn ${activeTab === 'devices' ? 'active' : ''}`}
+            className={`tab-btn ${safeActiveTab === 'devices' ? 'active' : ''}`}
             onClick={() => setActiveTab('devices')}
           >
             Devices
           </button>
-          <button
-            className={`tab-btn ${activeTab === 'config' ? 'active' : ''}`}
-            onClick={() => setActiveTab('config')}
-          >
-            Configuration
-          </button>
-          <button
-            className={`tab-btn ${activeTab === 'replay' ? 'active' : ''}`}
-            onClick={() => setActiveTab('replay')}
-          >
-            Journey Replay
-          </button>
+          {experimentalEnabled && (
+            <button
+              className={`tab-btn ${safeActiveTab === 'config' ? 'active' : ''}`}
+              onClick={() => setActiveTab('config')}
+              title="Experimental — gate via VITE_ENABLE_EXPERIMENTAL"
+            >
+              Configuration <span style={{ fontSize: '0.7em', opacity: 0.6 }}>(experimental)</span>
+            </button>
+          )}
+          {experimentalEnabled && (
+            <button
+              className={`tab-btn ${safeActiveTab === 'replay' ? 'active' : ''}`}
+              onClick={() => setActiveTab('replay')}
+              title="Experimental — gate via VITE_ENABLE_EXPERIMENTAL"
+            >
+              Journey Replay <span style={{ fontSize: '0.7em', opacity: 0.6 }}>(experimental)</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -228,7 +248,7 @@ export function App() {
         </div>
       )}
 
-      {activeTab === 'builder' && (
+      {safeActiveTab === 'builder' && (
         <div className="builder-container">
           <aside className="workflow-list">
             <div className="workflow-list-header">
@@ -311,7 +331,7 @@ export function App() {
         </div>
       )}
 
-      {activeTab === 'devices' && (
+      {safeActiveTab === 'devices' && (
         <div className="devices-container">
           <div className="devices-subtabs">
             <button
@@ -332,7 +352,7 @@ export function App() {
         </div>
       )}
 
-      {activeTab === 'config' && (
+      {safeActiveTab === 'config' && (
         <div className="config-container">
           <div className="config-subtabs">
             <button
@@ -353,7 +373,7 @@ export function App() {
         </div>
       )}
 
-      {activeTab === 'replay' && <JourneyReplay />}
+      {safeActiveTab === 'replay' && <JourneyReplay />}
     </div>
   );
 }
