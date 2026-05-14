@@ -155,6 +155,18 @@ Matchers evaluate every log/event on the device. When a matcher's conditions are
 | `field_absence` | Field missing from log | `field_name: string` |
 | `timeout` | Time elapsed without match | `duration_ms: number` |
 
+### SDK telemetry attributes referenced by matchers
+
+The full mobile telemetry attribute namespace is documented in
+[`mobile-otel/docs/reference/TELEMETRY_SIGNALS.md`](../../../mobile-otel/docs/reference/TELEMETRY_SIGNALS.md).
+Recently added attributes worth highlighting for policy authors:
+
+| Attribute / event name | Where it appears | Use in matchers |
+|---|---|---|
+| `mobile.wireframe.id` | `ui.wireframe` and `ui.wireframe.ref` log records | SHA-256 of the wireframe JSON. Stable across `ui.wireframe.ref` records that reference the same payload. Useful for `field_presence` matchers or for joining replay timelines. |
+| Event name `ui.wireframe.ref` | Lightweight ref emitted when content-hash dedup matches | `event_match` with `event_name: "ui.wireframe.ref"` matches the dedup record. Most policies want `event_name: "ui.wireframe"` for the full payload only. |
+| Trigger `policy_<id>` | `mobile.screenshot.trigger` / `mobile.wireframe.trigger` | Captures emitted by the SDK's policy-match hook (added 2026-05-14) carry `policy_<id>` as the trigger label, e.g. `policy_crash-recovery`. |
+
 ### Compound Matchers (AND/OR)
 
 Use `combine` + `children` for compound conditions:
